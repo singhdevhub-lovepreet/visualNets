@@ -1,0 +1,1640 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Qwen3 Forward Pass — Interactive Simulator</title>
+<style>
+/* ============================================================
+   Qwen3 Forward-Pass Simulator
+   Ground: deep blue-black. Data glows; chrome stays quiet.
+   Roles: flow=cyan · Q=amber · K=mint · V=lilac · winner=gold
+   ============================================================ */
+:root{
+  --bg:#0B0F1A;
+  --bg-2:#0E1422;
+  --glass:rgba(148,163,190,.055);
+  --glass-2:rgba(148,163,190,.09);
+  --line:rgba(148,163,190,.16);
+  --line-2:rgba(148,163,190,.28);
+  --ink:#E7ECF6;
+  --ink-2:#93A0B8;
+  --ink-3:#5B6880;
+
+  /* validated categorical fills (marks) */
+  --c-flow:#2E9FC6; --c-q:#D07E33; --c-k:#2FA97C; --c-v:#9C6BD9; --c-gold:#B78C1F;
+  /* bright text/glow tints of the same hues (labels only — identity is also in words) */
+  --t-flow:#7FD4F2; --t-q:#F2AA60; --t-k:#5FDCAB; --t-v:#CBA4F4; --t-gold:#EFCB63;
+
+  --mono:ui-monospace,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace;
+  --serif:"New York","Iowan Old Style",Palatino,Georgia,serif;
+  --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+
+  --r:12px;
+  --zoom:1;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{
+  background:
+    radial-gradient(1100px 500px at 50% -10%, rgba(46,159,198,.08), transparent 60%),
+    radial-gradient(900px 600px at 90% 110%, rgba(156,107,217,.05), transparent 60%),
+    var(--bg);
+  color:var(--ink);
+  font:15px/1.55 var(--sans);
+  display:flex;flex-direction:column;
+  overflow:hidden;
+  -webkit-font-smoothing:antialiased;
+}
+button{font:inherit;color:inherit;background:none;border:none;cursor:pointer}
+:focus-visible{outline:2px solid var(--t-flow);outline-offset:2px;border-radius:6px}
+
+/* ---------- top bar ---------- */
+.topbar{
+  display:flex;align-items:center;gap:16px;
+  padding:10px 18px;border-bottom:1px solid var(--line);
+  background:rgba(11,15,26,.75);backdrop-filter:blur(14px);
+  z-index:30;flex:none;
+}
+.brand{display:flex;align-items:baseline;gap:10px;white-space:nowrap}
+.brand b{font-weight:650;letter-spacing:.02em}
+.brand .sub{font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-3)}
+.crumb{display:flex;align-items:center;gap:6px;flex:1;min-width:0;overflow:hidden}
+.crumb .sep{color:var(--ink-3)}
+.crumb button{
+  font-size:13px;color:var(--ink-2);padding:3px 9px;border-radius:99px;
+  border:1px solid transparent;white-space:nowrap;
+}
+.crumb button:hover{color:var(--ink);background:var(--glass)}
+.crumb button.here{color:var(--ink);border-color:var(--line-2);background:var(--glass)}
+.crumb .lvl{font:11px var(--mono);color:var(--t-flow);margin-right:2px}
+.zoomer{display:flex;align-items:center;gap:2px;flex:none}
+.zoomer button{
+  width:28px;height:28px;border-radius:8px;border:1px solid var(--line);
+  color:var(--ink-2);display:grid;place-items:center;font-size:14px;
+}
+.zoomer button:hover{color:var(--ink);background:var(--glass)}
+.zoomer .zlab{font:11px var(--mono);color:var(--ink-3);width:42px;text-align:center}
+
+/* ---------- app grid ---------- */
+.app{flex:1;display:grid;grid-template-columns:224px minmax(0,1fr) 312px;min-height:0}
+
+/* ---------- left rail ---------- */
+.rail{
+  border-right:1px solid var(--line);padding:14px 10px;
+  display:flex;flex-direction:column;gap:2px;overflow-y:auto;
+}
+.rail h3{
+  font-size:10px;letter-spacing:.16em;text-transform:uppercase;
+  color:var(--ink-3);padding:4px 10px 8px;font-weight:600;
+}
+.rail button{
+  text-align:left;padding:6px 10px;border-radius:8px;font-size:13px;color:var(--ink-2);
+  display:flex;align-items:center;gap:8px;
+}
+.rail button:hover{background:var(--glass);color:var(--ink)}
+.rail button.on{background:var(--glass-2);color:var(--ink)}
+.rail button.sub{padding-left:24px;font-size:12.5px}
+.rail .dot{width:7px;height:7px;border-radius:99px;background:var(--ink-3);flex:none}
+.rail button.on .dot{background:var(--t-flow);box-shadow:0 0 8px var(--t-flow)}
+.spec{
+  margin-top:auto;padding:12px;border:1px solid var(--line);border-radius:var(--r);
+  background:var(--glass);font:11.5px/1.9 var(--mono);color:var(--ink-2);
+}
+.spec b{color:var(--ink);font-weight:600}
+.spec .row{display:flex;justify-content:space-between;gap:8px}
+.spec .hd{font-family:var(--sans);font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-3);margin-bottom:6px}
+
+/* ---------- stage ---------- */
+.stage-wrap{overflow:auto;position:relative;min-width:0}
+#stage{
+  transform:scale(var(--zoom));transform-origin:top center;
+  padding:30px 34px 90px;max-width:1060px;margin:0 auto;
+  display:flex;flex-direction:column;align-items:center;gap:0;
+}
+.scene-title{width:100%;max-width:860px;margin-bottom:18px}
+.scene-title .eyebrow{
+  font:11px var(--mono);letter-spacing:.18em;text-transform:uppercase;color:var(--t-flow);
+}
+.scene-title h1{
+  font:600 27px/1.2 var(--serif);letter-spacing:.005em;margin:4px 0 6px;text-wrap:balance;
+}
+.scene-title p{font:15px/1.65 var(--serif);color:var(--ink-2);max-width:62ch}
+.scene-title p code{font:12.5px var(--mono);color:var(--t-flow)}
+
+/* ---------- glass cards / flow boxes ---------- */
+.glass{
+  background:var(--glass);border:1px solid var(--line);border-radius:var(--r);
+  backdrop-filter:blur(10px);
+}
+.flowbox{
+  position:relative;min-width:250px;max-width:390px;
+  background:var(--glass);border:1px solid var(--line);border-radius:var(--r);
+  padding:11px 18px;text-align:center;cursor:pointer;
+  transition:border-color .25s,box-shadow .3s,background .25s,transform .25s;
+}
+.flowbox:hover{border-color:var(--line-2);background:var(--glass-2);transform:translateY(-1px)}
+.flowbox .bt{font-size:14.5px;font-weight:600;letter-spacing:.01em}
+.flowbox .bs{font:11.5px var(--mono);color:var(--ink-2);margin-top:2px}
+.flowbox .badge{
+  position:absolute;top:-9px;right:12px;font:10.5px var(--mono);
+  padding:1px 8px;border-radius:99px;border:1px solid var(--line-2);
+  background:var(--bg-2);color:var(--ink-2);
+}
+.flowbox.lit{
+  border-color:color-mix(in srgb,var(--t-flow) 55%,transparent);
+  box-shadow:0 0 0 1px color-mix(in srgb,var(--t-flow) 25%,transparent),0 0 26px rgba(46,159,198,.22);
+  background:var(--glass-2);
+}
+.flowbox.dim{opacity:.5}
+.flowbox .zoomhint{
+  position:absolute;inset:auto 8px 6px auto;font-size:10px;color:var(--ink-3);
+  opacity:0;transition:opacity .2s;
+}
+.flowbox:hover .zoomhint{opacity:1}
+.arr{display:flex;flex-direction:column;align-items:center;color:var(--ink-3);flex:none}
+.arr svg{display:block}
+.arr .stem{stroke:var(--line-2);stroke-width:1.5}
+.arr .head{fill:var(--line-2)}
+.arr.lit .stem{stroke:var(--t-flow)}
+.arr.lit .head{fill:var(--t-flow)}
+.arr .flowdash{
+  stroke:var(--t-flow);stroke-width:2;stroke-dasharray:4 7;opacity:0;
+}
+.arr.lit .flowdash{opacity:.9;animation:dashmove .8s linear infinite}
+@keyframes dashmove{to{stroke-dashoffset:-11}}
+
+/* ---------- tensor chips ---------- */
+.chip{
+  display:inline-flex;align-items:baseline;gap:7px;
+  font:12px var(--mono);padding:3px 11px;border-radius:99px;
+  border:1px solid var(--line-2);background:var(--bg-2);color:var(--ink);
+  white-space:nowrap;
+}
+.chip .nm{color:var(--ink-2);font-size:11px}
+.chip.flow{border-color:var(--c-flow);color:var(--t-flow)}
+.chip.q{border-color:var(--c-q);color:var(--t-q)}
+.chip.k{border-color:var(--c-k);color:var(--t-k)}
+.chip.v{border-color:var(--c-v);color:var(--t-v)}
+.chip.gold{border-color:var(--c-gold);color:var(--t-gold)}
+.chip.big{font-size:13px;padding:5px 14px}
+
+/* the traveling tensor during play */
+.traveler{
+  position:fixed;z-index:60;pointer-events:none;
+  font:12px var(--mono);padding:4px 13px;border-radius:99px;
+  border:1px solid var(--t-flow);background:rgba(11,15,26,.92);color:var(--t-flow);
+  box-shadow:0 0 18px rgba(127,212,242,.35);white-space:nowrap;
+}
+.mote{
+  position:fixed;z-index:55;width:6px;height:6px;border-radius:99px;
+  pointer-events:none;opacity:0;
+}
+
+/* ---------- matrices ---------- */
+.mtx{display:inline-flex;flex-direction:column;gap:6px;align-items:center}
+.mtx .cap{font:11.5px var(--mono);color:var(--ink-2);display:flex;gap:8px;align-items:baseline}
+.mtx .cap b{color:var(--ink);font-weight:600;font-family:var(--sans);font-size:12.5px}
+.mtx-grid{
+  display:grid;gap:3px;padding:8px;border-radius:10px;
+  border:1px solid var(--line);background:rgba(6,9,16,.55);
+}
+.cell{
+  min-width:44px;height:26px;border-radius:5px;display:grid;place-items:center;
+  font:11px var(--mono);color:var(--ink-2);background:var(--glass);
+  transition:background .35s,color .35s,box-shadow .35s,opacity .35s;
+  font-variant-numeric:tabular-nums;
+}
+.cell.hd{background:none;color:var(--ink-3);font-size:10px;min-width:34px}
+.cell.rowhd{background:none;color:var(--ink-2);justify-self:end;padding-right:6px;font-size:11px}
+.cell.dots{background:none;color:var(--ink-3);min-width:20px}
+.cell.hide{opacity:0}
+.cell.masked{
+  color:var(--ink-3);
+  background:repeating-linear-gradient(135deg,rgba(148,163,190,.10) 0 3px,transparent 3px 7px);
+}
+.cell.pulse{box-shadow:0 0 0 1.5px var(--t-flow),0 0 14px rgba(127,212,242,.5);color:var(--ink)}
+
+/* heatmap cells get inline background; give hover ring */
+.cell.heat{cursor:default;color:#06121a;font-weight:600}
+.cell.heat.lo{color:var(--ink-2);font-weight:400}
+.cell.heat:hover{box-shadow:0 0 0 1.5px var(--ink)}
+
+/* embedding matrix graphic */
+.embwall{
+  position:relative;width:198px;border-radius:10px;border:1px solid var(--line);
+  background:
+    repeating-linear-gradient(180deg,rgba(148,163,190,.09) 0 1px,transparent 1px 7px),
+    linear-gradient(180deg,rgba(46,159,198,.06),rgba(156,107,217,.05)),
+    rgba(6,9,16,.6);
+  overflow:hidden;
+}
+.embrow{
+  position:absolute;left:0;right:0;height:8px;border-radius:2px;
+  background:transparent;transition:background .3s,box-shadow .3s;
+}
+.embrow.lit{background:color-mix(in srgb,var(--c-flow) 75%,transparent);box-shadow:0 0 12px rgba(127,212,242,.6)}
+.embrow .tag{
+  position:absolute;right:calc(100% + 8px);top:50%;transform:translateY(-50%);
+  font:10.5px var(--mono);color:var(--ink-3);white-space:nowrap;transition:color .3s;
+}
+.embrow.lit .tag{color:var(--t-flow)}
+
+/* ---------- weight boxes (Wq etc.) ---------- */
+.wbox{
+  width:96px;height:72px;border-radius:10px;border:1px dashed var(--line-2);
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;
+  background:
+    repeating-linear-gradient(45deg,rgba(148,163,190,.05) 0 4px,transparent 4px 9px),
+    var(--glass);
+  transition:border-color .3s,box-shadow .3s;
+}
+.wbox b{font:600 13px var(--sans)}
+.wbox span{font:10px var(--mono);color:var(--ink-3)}
+.wbox.lit{box-shadow:0 0 18px rgba(127,212,242,.25)}
+.wbox.q{border-color:var(--c-q)} .wbox.q b{color:var(--t-q)}
+.wbox.k{border-color:var(--c-k)} .wbox.k b{color:var(--t-k)}
+.wbox.v{border-color:var(--c-v)} .wbox.v b{color:var(--t-v)}
+.wbox.n{border-color:var(--line-2)}
+
+/* ---------- generic reveal ---------- */
+.rv{opacity:0;transform:translateY(10px);transition:opacity .5s ease,transform .5s ease}
+.rv.on{opacity:1;transform:none}
+.fadegroup{transition:opacity .4s}
+.fadegroup.dim{opacity:.35}
+
+/* ---------- operators ---------- */
+.op{
+  font:15px var(--mono);color:var(--ink-2);width:34px;height:34px;border-radius:99px;
+  border:1px solid var(--line);display:grid;place-items:center;flex:none;background:var(--bg-2);
+}
+.op.lit{color:var(--t-flow);border-color:var(--t-flow);box-shadow:0 0 12px rgba(127,212,242,.35)}
+
+/* ---------- token cards ---------- */
+.tokcard{
+  display:flex;flex-direction:column;align-items:center;gap:6px;
+  padding:12px 18px;border-radius:var(--r);border:1px solid var(--line);
+  background:var(--glass);min-width:96px;transition:border-color .3s,box-shadow .3s;
+}
+.tokcard .tw{font:600 17px var(--serif)}
+.tokcard .tid{font:12px var(--mono);color:var(--t-flow)}
+.tokcard.lit{border-color:var(--c-flow);box-shadow:0 0 16px rgba(46,159,198,.25)}
+
+/* ---------- neurons (FFN) ---------- */
+.neuronrow{display:flex;gap:6px;flex-wrap:wrap;justify-content:center;max-width:560px}
+.neuron{
+  width:16px;height:16px;border-radius:99px;background:var(--glass-2);
+  border:1px solid var(--line);transition:all .5s;
+}
+.neuron.hot{background:var(--c-k);border-color:var(--t-k);box-shadow:0 0 10px rgba(95,220,171,.55)}
+.neuron.cold{opacity:.28;transform:scale(.75)}
+
+/* ---------- bars (logits) ---------- */
+.barfield{
+  display:flex;align-items:flex-end;gap:2px;height:120px;padding:10px 12px 0;
+  border-bottom:1px solid var(--line-2);
+}
+.bar{
+  width:9px;border-radius:3px 3px 0 0;background:var(--c-flow);
+  transition:height .7s cubic-bezier(.5,0,.3,1),background .4s,opacity .4s;
+  height:2px;min-height:2px;
+}
+.bar.win{background:var(--c-gold);box-shadow:0 0 14px rgba(239,203,99,.45)}
+
+/* ---------- probability list ---------- */
+.problist{display:flex;flex-direction:column;gap:8px;width:330px}
+.probrow{display:grid;grid-template-columns:86px 1fr 52px;gap:10px;align-items:center}
+.probrow .pw{font:600 14px var(--serif);text-align:right}
+.probrow .pv{font:12px var(--mono);color:var(--ink-2);text-align:right;font-variant-numeric:tabular-nums}
+.probrow .ptrack{height:10px;border-radius:99px;background:var(--glass);overflow:hidden}
+.probrow .pfill{height:100%;border-radius:99px;background:var(--c-flow);width:0;transition:width .9s cubic-bezier(.5,0,.3,1)}
+.probrow.win .pfill{background:var(--c-gold)}
+.probrow.win .pw,.probrow.win .pv{color:var(--t-gold)}
+.probrow.win .ptrack{box-shadow:0 0 14px rgba(239,203,99,.3)}
+
+/* ---------- KV cache bars ---------- */
+.kv{display:flex;flex-direction:column;gap:6px;width:360px}
+.kv .kvlab{display:flex;justify-content:space-between;font:11px var(--mono);color:var(--ink-2)}
+.kvtrack{height:18px;border-radius:6px;background:var(--glass);overflow:hidden;border:1px solid var(--line)}
+.kvfill{height:100%;background:repeating-linear-gradient(90deg,var(--c-v) 0 14px,color-mix(in srgb,var(--c-v) 70%,#000) 14px 16px);transition:width 1.2s cubic-bezier(.5,0,.3,1)}
+
+/* ---------- head cards (GQA) ---------- */
+.headcard{
+  display:flex;flex-direction:column;gap:5px;padding:10px;border-radius:10px;
+  border:1px solid var(--line);background:var(--glass);align-items:center;
+  transition:opacity .5s,transform .5s;
+}
+.headcard .hlab{font:10.5px var(--mono);color:var(--ink-3)}
+.minichip{
+  font:10.5px var(--mono);padding:2px 9px;border-radius:6px;border:1px solid;
+  transition:opacity .5s,transform .6s cubic-bezier(.5,0,.3,1);
+}
+.minichip.q{border-color:var(--c-q);color:var(--t-q);background:color-mix(in srgb,var(--c-q) 14%,transparent)}
+.minichip.k{border-color:var(--c-k);color:var(--t-k);background:color-mix(in srgb,var(--c-k) 14%,transparent)}
+.minichip.v{border-color:var(--c-v);color:var(--t-v);background:color-mix(in srgb,var(--c-v) 14%,transparent)}
+
+/* ---------- inspector ---------- */
+.inspector{
+  border-left:1px solid var(--line);overflow-y:auto;padding:18px 18px 90px;
+  background:rgba(9,12,21,.5);
+}
+.inspector .itag{
+  font:10.5px var(--mono);letter-spacing:.15em;text-transform:uppercase;color:var(--t-flow);
+}
+.inspector h2{font:600 19px/1.25 var(--serif);margin:4px 0 12px;text-wrap:balance}
+.ifield{margin-bottom:13px}
+.ifield .fl{
+  font-size:10px;letter-spacing:.15em;text-transform:uppercase;color:var(--ink-3);
+  font-weight:600;margin-bottom:3px;
+}
+.ifield .fv{font:13.5px/1.6 var(--serif);color:var(--ink-2)}
+.ifield .fv b{color:var(--ink);font-weight:600}
+.ifield .fv.mono{font:12px/1.7 var(--mono);color:var(--ink)}
+.ishapes{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px}
+.formula{
+  font:13px/1.7 var(--mono);color:var(--ink);padding:10px 12px;border-radius:10px;
+  border:1px solid var(--line);background:rgba(6,9,16,.6);overflow-x:auto;white-space:nowrap;
+}
+.formula .fq{color:var(--t-q)} .formula .fk{color:var(--t-k)}
+.formula .fv2{color:var(--t-v)} .formula .ff{color:var(--t-flow)}
+.ifacts{list-style:none;display:flex;flex-direction:column;gap:7px}
+.ifacts li{
+  font:12.5px/1.55 var(--sans);color:var(--ink-2);padding-left:14px;position:relative;
+}
+.ifacts li::before{content:"";position:absolute;left:0;top:8px;width:5px;height:5px;border-radius:99px;background:var(--c-flow)}
+
+/* ---------- transport ---------- */
+.transport{
+  flex:none;display:flex;align-items:center;gap:14px;
+  padding:10px 18px;border-top:1px solid var(--line);
+  background:rgba(11,15,26,.85);backdrop-filter:blur(14px);z-index:30;
+}
+.tbtn{
+  width:34px;height:34px;border-radius:10px;border:1px solid var(--line);
+  display:grid;place-items:center;color:var(--ink-2);
+}
+.tbtn:hover{color:var(--ink);background:var(--glass)}
+.tbtn svg{display:block}
+.tbtn.play{
+  width:42px;height:42px;border-radius:12px;color:var(--bg);
+  background:var(--t-flow);border-color:transparent;
+}
+.tbtn.play:hover{background:#9AE0F8}
+.caption{flex:1;min-width:0}
+.caption .stepname{font:600 13.5px var(--sans);color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.caption .stepdesc{font:12px var(--sans);color:var(--ink-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.progress{display:flex;gap:4px;align-items:center;flex:none}
+.pip{width:14px;height:4px;border-radius:99px;background:var(--glass-2);transition:background .3s}
+.pip.done{background:var(--c-flow)}
+.pip.now{background:var(--t-flow);box-shadow:0 0 8px rgba(127,212,242,.6)}
+.speed{display:flex;align-items:center;gap:8px;flex:none}
+.speed label{font:10.5px var(--mono);color:var(--ink-3);letter-spacing:.1em}
+.speed input{accent-color:var(--t-flow);width:90px}
+.speed .sval{font:11px var(--mono);color:var(--ink-2);width:34px}
+
+/* ---------- tooltip ---------- */
+.tip{
+  position:fixed;z-index:80;pointer-events:none;max-width:270px;
+  padding:8px 12px;border-radius:10px;border:1px solid var(--line-2);
+  background:rgba(13,18,30,.96);backdrop-filter:blur(8px);
+  font:12.5px/1.5 var(--sans);color:var(--ink);
+  box-shadow:0 8px 28px rgba(0,0,0,.5);opacity:0;transition:opacity .12s;
+}
+.tip.on{opacity:1}
+.tip .tt{font-weight:650;margin-bottom:2px}
+.tip .tm{font:11px var(--mono);color:var(--t-flow)}
+.tip .td{color:var(--ink-2)}
+
+/* ---------- misc layout helpers ---------- */
+.hrow{display:flex;align-items:center;gap:14px;justify-content:center;flex-wrap:wrap}
+.vcol{display:flex;flex-direction:column;align-items:center;gap:0}
+.panel{padding:18px 22px}
+.note{
+  font:13px/1.6 var(--serif);color:var(--ink-2);max-width:56ch;text-align:center;
+}
+.note b{color:var(--ink)}
+.linkchip{
+  font:11.5px var(--mono);color:var(--t-flow);border:1px solid var(--c-flow);
+  border-radius:99px;padding:3px 12px;cursor:pointer;background:transparent;
+}
+.linkchip:hover{background:color-mix(in srgb,var(--c-flow) 15%,transparent)}
+.keycap{font:10.5px var(--mono);border:1px solid var(--line-2);border-radius:5px;padding:0 5px;color:var(--ink-2)}
+
+/* residual rivers */
+.river-main{stroke:var(--t-flow);stroke-width:3;fill:none;stroke-dasharray:6 9}
+.river-branch{stroke:var(--t-q);stroke-width:3;fill:none;stroke-dasharray:6 9}
+.river-anim{animation:dashmove 1s linear infinite}
+.river-static{stroke:var(--line-2);stroke-width:1.5;fill:none}
+
+/* layer stack */
+.layerbar{
+  width:330px;padding:6px 14px;border-radius:9px;border:1px solid var(--line);
+  background:var(--glass);font:11.5px var(--mono);color:var(--ink-2);
+  display:flex;justify-content:space-between;align-items:center;
+  transition:border-color .25s,box-shadow .25s,background .25s;
+}
+.layerbar.lit{
+  border-color:var(--t-flow);color:var(--ink);background:var(--glass-2);
+  box-shadow:0 0 14px rgba(127,212,242,.28);
+}
+.layerbar.done{border-color:color-mix(in srgb,var(--c-flow) 45%,transparent);color:var(--ink-2)}
+
+@media (max-width:1180px){
+  .app{grid-template-columns:minmax(0,1fr) 300px}
+  .rail{display:none}
+}
+@media (max-width:900px){
+  .app{grid-template-columns:minmax(0,1fr)}
+  .inspector{
+    position:fixed;right:0;top:49px;bottom:63px;width:min(320px,88vw);
+    transform:translateX(100%);transition:transform .3s;z-index:40;
+    background:rgba(9,12,21,.97);
+  }
+  .inspector.open{transform:none}
+  .itoggle{display:grid !important}
+}
+.itoggle{
+  display:none;position:fixed;right:14px;top:60px;z-index:41;
+  width:36px;height:36px;border-radius:99px;border:1px solid var(--line-2);
+  background:var(--bg-2);color:var(--t-flow);place-items:center;font:600 15px var(--serif);
+}
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation-duration:.01ms !important;transition-duration:.01ms !important}
+}
+</style>
+</head>
+<body data-palette="#2E9FC6,#D07E33,#2FA97C,#9C6BD9,#B78C1F">
+<div class="topbar">
+  <div class="brand"><b>Qwen3</b><span class="sub">Forward-Pass Simulator</span></div>
+  <nav class="crumb" id="crumb" aria-label="Depth breadcrumb"></nav>
+  <div class="zoomer">
+    <button id="zoomOut" title="Zoom out" aria-label="Zoom out">−</button>
+    <span class="zlab" id="zoomLab">100%</span>
+    <button id="zoomIn" title="Zoom in" aria-label="Zoom in">+</button>
+    <button id="zoomReset" title="Reset camera" aria-label="Reset camera">⤾</button>
+  </div>
+</div>
+
+<div class="app">
+  <nav class="rail" id="rail" aria-label="Pipeline navigator"></nav>
+  <main class="stage-wrap" id="stageWrap"><div id="stage"></div></main>
+  <aside class="inspector" id="inspector" aria-label="Component inspector"></aside>
+</div>
+<button class="itoggle" id="itoggle" aria-label="Toggle inspector">i</button>
+
+<footer class="transport">
+  <button class="tbtn" id="btnRestart" title="Restart scene" aria-label="Restart">
+    <svg width="14" height="14" viewBox="0 0 14 14"><path d="M3 1v12M13 1 5 7l8 6V1z" fill="currentColor"/></svg>
+  </button>
+  <button class="tbtn" id="btnPrev" title="Previous step (←)" aria-label="Previous step">
+    <svg width="14" height="14" viewBox="0 0 14 14"><path d="M11 1 3 7l8 6V1z" fill="currentColor"/></svg>
+  </button>
+  <button class="tbtn play" id="btnPlay" title="Play / pause (space)" aria-label="Play or pause">
+    <svg id="icoPlay" width="15" height="15" viewBox="0 0 14 14"><path d="M3 1l10 6-10 6V1z" fill="currentColor"/></svg>
+    <svg id="icoPause" width="15" height="15" viewBox="0 0 14 14" style="display:none"><path d="M3 1h3v12H3zM8 1h3v12H8z" fill="currentColor"/></svg>
+  </button>
+  <button class="tbtn" id="btnNext" title="Next step (→)" aria-label="Next step">
+    <svg width="14" height="14" viewBox="0 0 14 14"><path d="M3 1l8 6-8 6V1z" fill="currentColor"/></svg>
+  </button>
+  <div class="caption">
+    <div class="stepname" id="stepName">Welcome</div>
+    <div class="stepdesc" id="stepDesc">Press play, or click any box to zoom in.</div>
+  </div>
+  <div class="progress" id="progress"></div>
+  <div class="speed">
+    <label for="speedCtl">SPEED</label>
+    <input id="speedCtl" type="range" min="0.25" max="3" step="0.25" value="1">
+    <span class="sval" id="speedVal">1.0×</span>
+  </div>
+</footer>
+
+<div class="tip" id="tip" role="tooltip"></div>
+
+<script>
+'use strict';
+/* ================= utilities ================= */
+const $=s=>document.querySelector(s);
+const RM=matchMedia('(prefers-reduced-motion: reduce)').matches;
+const SPEED={v:1};
+const dur=ms=>RM?1:ms/SPEED.v;
+
+function h(tag,attrs={},...kids){
+  const e=document.createElement(tag);
+  for(const[k,v]of Object.entries(attrs||{})){
+    if(v==null||v===false)continue;
+    if(k==='class')e.className=v;
+    else if(k==='style'&&typeof v==='object')Object.assign(e.style,v);
+    else if(k.startsWith('on'))e.addEventListener(k.slice(2),v);
+    else if(k==='html')e.innerHTML=v;
+    else e.setAttribute(k,v===true?'':v);
+  }
+  for(const kd of kids.flat(9)){
+    if(kd==null)continue;
+    if(typeof kd==='string'&&(/<[a-zA-Z]/.test(kd)||/&[a-z]+;/.test(kd))){
+      const s=document.createElement('span');s.innerHTML=kd;e.append(s);
+    }else e.append(kd.nodeType?kd:document.createTextNode(kd));
+  }
+  return e;
+}
+function sv(tag,attrs={},...kids){
+  const e=document.createElementNS('http://www.w3.org/2000/svg',tag);
+  for(const[k,v]of Object.entries(attrs||{}))if(v!=null)e.setAttribute(k,v);
+  for(const kd of kids.flat(9))if(kd!=null)e.append(kd.nodeType?kd:document.createTextNode(kd));
+  return e;
+}
+/* deterministic pseudo-random numbers so hover values stay consistent */
+function rng(seed){let a=seed>>>0;return()=>{a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296}}
+function vals(seed,n,scale=1.6){const r=rng(seed);return Array.from({length:n},()=>((r()*2-1)*scale))}
+const f2=x=>(x>=0?' ':'')+x.toFixed(2);
+
+/* motes: particles flying between two elements */
+function fly(fromEl,toEl,{color='var(--t-flow)',n=7,ms=850,size=6}={}){
+  if(RM||!fromEl||!toEl)return Promise.resolve();
+  const sr=fromEl.getBoundingClientRect(),tr=toEl.getBoundingClientRect();
+  const r=Math.random;
+  const ps=[];
+  for(let i=0;i<n;i++){
+    const d=h('div',{class:'mote'});
+    d.style.width=d.style.height=size+'px';
+    d.style.background=color;d.style.boxShadow=`0 0 10px ${color}`;
+    const x0=sr.left+sr.width*(0.25+r()*0.5),y0=sr.top+sr.height*(0.3+r()*0.4);
+    const x1=tr.left+tr.width*(0.25+r()*0.5),y1=tr.top+tr.height*(0.3+r()*0.4);
+    d.style.left=x0+'px';d.style.top=y0+'px';
+    document.body.appendChild(d);
+    const bow=(r()-0.5)*46;
+    const a=d.animate([
+      {transform:'translate(0,0)',opacity:0},
+      {opacity:1,offset:.12},
+      {transform:`translate(${(x1-x0)/2+bow}px,${(y1-y0)/2}px)`,opacity:1,offset:.5},
+      {transform:`translate(${x1-x0}px,${y1-y0}px)`,opacity:.9,offset:.88},
+      {transform:`translate(${x1-x0}px,${y1-y0}px)`,opacity:0}
+    ],{duration:dur(ms),delay:i*dur(55),easing:'cubic-bezier(.45,0,.25,1)'});
+    ps.push(a.finished.catch(()=>{}).then(()=>d.remove()));
+  }
+  return Promise.all(ps);
+}
+/* traveling tensor chip moving from one box to another */
+function travel(fromEl,toEl,text,ms=900){
+  if(RM||!fromEl||!toEl)return Promise.resolve();
+  const sr=fromEl.getBoundingClientRect(),tr=toEl.getBoundingClientRect();
+  const d=h('div',{class:'traveler'},text);
+  document.body.appendChild(d);
+  const w=d.getBoundingClientRect().width;
+  const x0=sr.left+sr.width/2-w/2,y0=sr.bottom-12;
+  const x1=tr.left+tr.width/2-w/2,y1=tr.top-12;
+  d.style.left=x0+'px';d.style.top=y0+'px';
+  const a=d.animate([
+    {transform:'translate(0,0)',opacity:0},
+    {opacity:1,offset:.15},
+    {transform:`translate(${x1-x0}px,${y1-y0}px)`,opacity:1,offset:.9},
+    {transform:`translate(${x1-x0}px,${y1-y0}px)`,opacity:0}
+  ],{duration:dur(ms),easing:'cubic-bezier(.5,0,.3,1)'});
+  return a.finished.catch(()=>{}).then(()=>d.remove());
+}
+/* staggered helper */
+function stagger(items,fn,step=70){
+  items.forEach((it,i)=>setTimeout(()=>fn(it,i),RM?0:dur(step)*i));
+  return new Promise(res=>setTimeout(res,RM?0:dur(step)*items.length+dur(300)));
+}
+
+/* ================= shared widgets ================= */
+/* vertical arrow between flow boxes */
+function arrow(hgt=30){
+  const a=h('div',{class:'arr'});
+  a.append(sv('svg',{width:16,height:hgt,viewBox:`0 0 16 ${hgt}`},
+    sv('line',{class:'stem',x1:8,y1:0,x2:8,y2:hgt-7}),
+    sv('line',{class:'flowdash',x1:8,y1:0,x2:8,y2:hgt-7}),
+    sv('path',{class:'head',d:`M8 ${hgt} L3.5 ${hgt-8} L12.5 ${hgt-8} Z`})
+  ));
+  return a;
+}
+/* small matrix: data = 2D array of strings/numbers; opts for labels */
+function matrixEl({name,shape,rows,rowHds,colHds,cls='',cellCls=null,hidden=false}){
+  const grid=h('div',{class:'mtx-grid'});
+  const nc=rows[0].length+(rowHds?1:0);
+  grid.style.gridTemplateColumns=`repeat(${nc},auto)`;
+  if(colHds){
+    if(rowHds)grid.append(h('div',{class:'cell hd'}));
+    colHds.forEach(c=>grid.append(h('div',{class:'cell hd'},c)));
+  }
+  const cells=[];
+  rows.forEach((row,ri)=>{
+    if(rowHds)grid.append(h('div',{class:'cell rowhd'},rowHds[ri]));
+    row.forEach((v,ci)=>{
+      const extra=cellCls?cellCls(ri,ci,v):'';
+      const c=h('div',{class:'cell '+extra+(hidden?' hide':'')},v==null?'':String(v));
+      cells.push(c);grid.append(c);
+    });
+  });
+  const cap=h('div',{class:'cap'},h('b',{},name),shape?h('span',{},shape):null);
+  return{el:h('div',{class:'mtx '+cls},cap,grid),cells,grid,cap};
+}
+/* row of sampled vector numbers with ellipsis: [a b c … z] */
+function vecRow(seed,count=8,scale=1.4){
+  const v=vals(seed,count,scale);
+  const out=v.map(x=>f2(x));
+  out.splice(count-1,0,'…');
+  return out;
+}
+function sceneHeader(eyebrow,title,sub){
+  return h('div',{class:'scene-title'},
+    h('div',{class:'eyebrow'},eyebrow),
+    h('h1',{},title),
+    sub?h('p',{html:sub}):null);
+}
+
+/* ================= tooltip ================= */
+const tipEl=$('#tip');
+let tipTarget=null;
+document.addEventListener('pointerover',e=>{
+  const t=e.target.closest('[data-tip]');
+  if(t===tipTarget)return;
+  tipTarget=t;
+  if(!t){tipEl.classList.remove('on');return}
+  tipEl.innerHTML=t.dataset.tip;
+  tipEl.classList.add('on');
+});
+document.addEventListener('pointermove',e=>{
+  if(!tipTarget)return;
+  const w=tipEl.offsetWidth,hh=tipEl.offsetHeight;
+  let x=e.clientX+16,y=e.clientY+14;
+  if(x+w>innerWidth-8)x=e.clientX-w-14;
+  if(y+hh>innerHeight-8)y=e.clientY-hh-14;
+  tipEl.style.left=x+'px';tipEl.style.top=y+'px';
+});
+document.addEventListener('pointerout',e=>{
+  if(tipTarget&&!e.relatedTarget?.closest?.('[data-tip]')){tipTarget=null;tipEl.classList.remove('on')}
+});
+
+/* ================= scene engine ================= */
+const SCENES={};
+const state={sceneId:null,step:-1,playing:false,timer:null,ctx:null};
+
+function stopPlay(){
+  state.playing=false;clearTimeout(state.timer);state.timer=null;
+  $('#icoPlay').style.display='';$('#icoPause').style.display='none';
+}
+function mountScene(id){
+  stopPlay();
+  const sc=SCENES[id];if(!sc)return;
+  state.sceneId=id;state.step=-1;
+  const stage=$('#stage');
+  stage.innerHTML='';
+  document.querySelectorAll('.mote,.traveler').forEach(m=>m.remove());
+  state.ctx=sc.mount(stage)||{};
+  renderCrumb();renderRail();renderProgress();
+  setInfo(sc.info);
+  $('#stepName').textContent=sc.title;
+  $('#stepDesc').textContent=sc.steps.length?`${sc.steps.length} steps — press play or → to walk through`:'';
+  $('#stageWrap').scrollTop=0;
+}
+function navigate(id){mountScene(id);if(SCENES[id].steps.length)applyStep(0,{instant:false,rebuild:false})}
+function applyStep(i,{instant=false,rebuild=true}={}){
+  const sc=SCENES[state.sceneId];if(!sc||!sc.steps.length)return;
+  i=Math.max(0,Math.min(i,sc.steps.length-1));
+  if(rebuild){
+    const stage=$('#stage');stage.innerHTML='';
+    document.querySelectorAll('.mote,.traveler').forEach(m=>m.remove());
+    state.ctx=sc.mount(stage)||{};
+    for(let k=0;k<i;k++)sc.steps[k].run(state.ctx,{instant:true});
+  }
+  state.step=i;
+  const st=sc.steps[i];
+  st.run(state.ctx,{instant:instant||RM});
+  setInfo(st.info||sc.info);
+  $('#stepName').textContent=`Step ${i+1}/${sc.steps.length} — ${st.name}`;
+  $('#stepDesc').textContent=st.caption||'';
+  renderProgress();
+}
+function advance(){
+  const sc=SCENES[state.sceneId];
+  if(state.step>=sc.steps.length-1){stopPlay();return}
+  applyStep(state.step+1,{rebuild:false});
+  if(state.playing)scheduleNext();
+}
+function scheduleNext(){
+  const sc=SCENES[state.sceneId];
+  const st=sc.steps[state.step];
+  clearTimeout(state.timer);
+  state.timer=setTimeout(()=>{if(state.playing)advance()},dur(st?.hold||2600));
+}
+function togglePlay(){
+  const sc=SCENES[state.sceneId];
+  if(!sc.steps.length)return;
+  if(state.playing){stopPlay();return}
+  state.playing=true;
+  $('#icoPlay').style.display='none';$('#icoPause').style.display='';
+  if(state.step>=sc.steps.length-1||state.step<0)applyStep(0,{rebuild:true});
+  scheduleNext();
+}
+function renderProgress(){
+  const sc=SCENES[state.sceneId];const p=$('#progress');p.innerHTML='';
+  if(!sc)return;
+  sc.steps.forEach((_,i)=>{
+    p.append(h('div',{class:'pip'+(i<state.step?' done':i===state.step?' now':'')}));
+  });
+}
+
+/* ================= chrome: crumb / rail / inspector ================= */
+function chain(id){const out=[];let c=id;while(c){out.unshift(c);c=SCENES[c].parent}return out}
+function renderCrumb(){
+  const c=$('#crumb');c.innerHTML='';
+  chain(state.sceneId).forEach((id,i,arr)=>{
+    if(i)c.append(h('span',{class:'sep'},'›'));
+    c.append(h('button',{class:i===arr.length-1?'here':'',onclick:()=>navigate(id)},
+      h('span',{class:'lvl'},'L'+SCENES[id].level),SCENES[id].title));
+  });
+}
+const RAIL=[
+  ['overview','Overview',0],['tokenizer','Tokenizer',0],['embedding','Embedding',0],
+  ['block','Transformer Block',0],['attention','Attention',1],['gqa','Grouped-Query Attn',1],
+  ['rmsnorm','RMSNorm',1],['ffn','SwiGLU Feed-Forward',1],['residual','Residual Stream',1],
+  ['layers','All 28 Layers',0],['head','Output Head',0]
+];
+function renderRail(){
+  const r=$('#rail');r.innerHTML='';
+  r.append(h('h3',{},'Forward pass'));
+  RAIL.forEach(([id,label,depth])=>{
+    r.append(h('button',{class:(depth?'sub ':'')+(state.sceneId===id?'on':''),onclick:()=>navigate(id)},
+      h('span',{class:'dot'}),label));
+  });
+  r.append(h('div',{class:'spec'},
+    h('div',{class:'hd'},'Qwen3 · 0.6B config'),
+    h('div',{class:'row'},'vocab',h('b',{},'151 936')),
+    h('div',{class:'row'},'d_model',h('b',{},'1024')),
+    h('div',{class:'row'},'layers',h('b',{},'28')),
+    h('div',{class:'row'},'Q heads',h('b',{},'16 × 128')),
+    h('div',{class:'row'},'KV heads',h('b',{},'8 × 128')),
+    h('div',{class:'row'},'FFN dim',h('b',{},'3072'))
+  ));
+}
+function setInfo(info){
+  const p=$('#inspector');p.innerHTML='';
+  if(!info)return;
+  p.append(h('div',{class:'itag'},info.tag||'Component'));
+  p.append(h('h2',{},info.title));
+  if(info.input||info.output){
+    p.append(h('div',{class:'ishapes'},
+      info.input?h('span',{class:'chip flow'},h('span',{class:'nm'},'in'),info.input):null,
+      info.output?h('span',{class:'chip flow'},h('span',{class:'nm'},'out'),info.output):null));
+  }
+  const field=(l,v,mono)=>v?h('div',{class:'ifield'},h('div',{class:'fl'},l),h('div',{class:'fv'+(mono?' mono':''),html:v})):null;
+  const addIf=el=>{if(el)p.append(el)};
+  addIf(field('Purpose',info.purpose));
+  if(info.formula)p.append(h('div',{class:'ifield'},h('div',{class:'fl'},'Formula'),h('div',{class:'formula',html:info.formula})));
+  addIf(field('Intuition',info.intuition));
+  addIf(field('Example',info.example));
+  if(info.facts)p.append(h('div',{class:'ifield'},h('div',{class:'fl'},'Worth knowing'),
+    h('ul',{class:'ifacts'},info.facts.map(f=>h('li',{html:f})))));
+}
+
+/* ================= transport wiring ================= */
+$('#btnPlay').addEventListener('click',togglePlay);
+$('#btnNext').addEventListener('click',()=>{stopPlay();applyStep(state.step+1,{rebuild:false})});
+$('#btnPrev').addEventListener('click',()=>{stopPlay();applyStep(Math.max(0,state.step-1),{instant:true})});
+$('#btnRestart').addEventListener('click',()=>{stopPlay();mountScene(state.sceneId);applyStep(0,{rebuild:false})});
+$('#speedCtl').addEventListener('input',e=>{
+  SPEED.v=parseFloat(e.target.value);
+  $('#speedVal').textContent=SPEED.v.toFixed(2).replace(/0$/,'')+'×';
+});
+let zoom=1;
+function setZoom(z){
+  zoom=Math.min(1.6,Math.max(0.5,z));
+  document.documentElement.style.setProperty('--zoom',zoom);
+  $('#zoomLab').textContent=Math.round(zoom*100)+'%';
+}
+$('#zoomIn').addEventListener('click',()=>setZoom(zoom+0.1));
+$('#zoomOut').addEventListener('click',()=>setZoom(zoom-0.1));
+$('#zoomReset').addEventListener('click',()=>{setZoom(1);$('#stageWrap').scrollTop=0});
+$('#itoggle').addEventListener('click',()=>$('#inspector').classList.toggle('open'));
+document.addEventListener('keydown',e=>{
+  if(e.target.tagName==='INPUT')return;
+  if(e.key===' '){e.preventDefault();togglePlay()}
+  else if(e.key==='ArrowRight'){stopPlay();applyStep(state.step+1,{rebuild:false})}
+  else if(e.key==='ArrowLeft'){stopPlay();applyStep(Math.max(0,state.step-1),{instant:true})}
+  else if(e.key==='Escape'){const p=SCENES[state.sceneId]?.parent;if(p)navigate(p)}
+});
+
+/* ================= component knowledge (inspector cards) ================= */
+const INFO={
+overview:{tag:'Level 0 · Architecture',title:'Qwen3 forward pass',
+ input:'"I love cats"',output:'next token',
+ purpose:'One complete pass: text becomes token IDs, IDs become vectors, 28 transformer blocks refine those vectors, and a linear head turns the last vector into a probability over 151 936 possible next tokens.',
+ intuition:'The whole network is a pipeline that repeatedly answers one question: <b>given everything so far, what comes next?</b> Every box below is clickable — each opens a deeper level, down to individual matrix multiplications.',
+ facts:['Click any box to zoom in (Esc goes back up).','Tensor shapes are shown everywhere: <b>rows = tokens, columns = features</b>.','Play ▶ walks the tensor through the pipeline.']},
+tokenizer:{tag:'Level 1 · Input',title:'Byte-Pair Encoding tokenizer',
+ input:'"I love cats"',output:'[3] token IDs',
+ purpose:'Neural networks cannot read text. The tokenizer splits the string into subword pieces from a fixed vocabulary of 151 936 entries and replaces each piece with its integer index.',
+ formula:'text → subwords → integer IDs',
+ intuition:'BPE greedily merges frequent character pairs, so common words are one token while rare words split into pieces. The model never sees letters — only these IDs.',
+ example:'"I love cats" → <span style="color:var(--t-flow)">[245, 8172, 12091]</span>',
+ facts:['Qwen3 uses a byte-level BPE with 151 936 entries.','A leading space is part of the token: " love" ≠ "love".','Sequence length N here is 3 — it stays 3 through every block.']},
+embedding:{tag:'Level 1 · Lookup',title:'Token embedding',
+ input:'[3] IDs',output:'3 × 1024',
+ purpose:'A learned lookup table of shape 151 936 × 1024. Each token ID selects one row — a 1024-dimensional vector that is the model\'s internal representation of that token.',
+ formula:'X = E[ids]&nbsp;&nbsp;<span style="color:var(--ink-3)">// row gather, no matmul</span>',
+ intuition:'Think of each row as a point in 1024-dimensional meaning-space. Words used similarly end up near each other, because gradient descent pushed them there.',
+ example:'ID 245 → row 245 of E → a vector like [0.42, −1.07, 0.33, …]',
+ facts:['This one table holds 151 936 × 1024 ≈ <b>155 M parameters</b>.','Qwen3-0.6B <b>ties</b> this matrix with the output head — the same weights map vectors back to vocabulary scores.','No position info yet — positions enter later via RoPE inside attention.']},
+block:{tag:'Level 1 · Core unit',title:'Transformer block (pre-norm)',
+ input:'3 × 1024',output:'3 × 1024',
+ purpose:'The repeated unit — Qwen3 stacks 28 of these. Each block lets tokens exchange information (attention), then lets each token think alone (feed-forward). Both sub-layers are wrapped in RMSNorm + a residual connection.',
+ formula:'x = x + Attn(<span class="ff">RMSNorm</span>(x))<br>x = x + FFN(<span class="ff">RMSNorm</span>(x))',
+ intuition:'Shape in = shape out (3×1024), which is exactly what makes stacking 28 of them possible. Each block adds a small refinement to the residual stream rather than replacing it.',
+ facts:['<b>Pre-norm</b>: normalization sits inside the branch, so the residual path is a clean identity highway.','Attention mixes <i>across tokens</i>; the FFN mixes <i>across features</i>.','Click Attention or Feed-Forward to explode them into full simulations.']},
+attention:{tag:'Level 2 · Token mixing',title:'Grouped-Query Attention',
+ input:'3 × 1024',output:'3 × 1024',
+ purpose:'The only place where tokens communicate. Every token builds a query, compares it against every earlier token\'s key, and takes a weighted blend of their values.',
+ formula:'softmax(&thinsp;<span class="fq">Q</span><span class="fk">Kᵀ</span> / √128&thinsp;)&thinsp;<span class="fv2">V</span>',
+ intuition:'Each token decides which other tokens matter before updating its own representation. The √d divisor keeps dot products from saturating softmax.',
+ example:'"cats" asks: <i>which earlier word tells me who does the loving?</i> — and pulls 62 % of its update from " love".',
+ facts:['16 query heads × 128 dims = 2048; only 8 key/value heads × 128 = 1024 (GQA).','Qwen3 applies <b>RMSNorm to Q and K per head</b> before RoPE — a stability trick.','A causal mask hides future tokens: position i may only look at ≤ i.']},
+gqa:{tag:'Level 2 · Efficiency',title:'Grouped-Query Attention (GQA)',
+ input:'16 Q heads',output:'8 KV heads',
+ purpose:'Instead of giving every query head its own key/value pair, pairs of query heads share one KV head: 16 Q heads, 8 KV heads. This halves the KV-cache that must live in GPU memory during generation.',
+ formula:'group size = 16 / 8 = 2 Q heads per KV head',
+ intuition:'Queries carry the "what am I looking for" — they need diversity. Keys and values are "what is stored here" — heads can share them with almost no quality loss.',
+ facts:['KV cache per token per layer: MHA 2·16·128 = 4096 values → GQA 2·8·128 = <b>2048 values (−50 %)</b>.','Generation speed is usually bound by moving the KV cache through memory, so smaller cache = faster decoding.','MQA (1 shared KV head) is the extreme; GQA is the sweet spot.']},
+rmsnorm:{tag:'Level 2 · Stability',title:'RMSNorm',
+ input:'… × 1024',output:'… × 1024',
+ purpose:'Rescales each token\'s vector so its root-mean-square is 1, then multiplies by a learned per-feature gain γ. Applied before attention, before the FFN, on Q and K, and once after the last block.',
+ formula:'y = x / √(mean(x²) + ε) · γ',
+ intuition:'After many residual additions, activations drift to wild magnitudes. RMSNorm puts every token back on a common scale so the next layer sees inputs in the range it was trained for.',
+ example:'[18, 241, −55, 900] → ÷ RMS 466.8 → [0.04, 0.52, −0.12, 1.93]',
+ facts:['Unlike LayerNorm it <b>skips mean-subtraction</b> — cheaper, and works just as well.','γ is 1024 learned numbers; there is no bias β.','ε ≈ 1e−6 avoids division by zero.']},
+ffn:{tag:'Level 2 · Feature mixing',title:'SwiGLU feed-forward',
+ input:'3 × 1024',output:'3 × 1024',
+ purpose:'Each token is processed independently: expand 1024 → 3072 twice (a gate path and a value path), multiply them elementwise, and project back 3072 → 1024. This is where most of the model\'s knowledge lives.',
+ formula:'FFN(x) = W<sub>down</sub>( SiLU(W<sub>gate</sub>x) ⊙ W<sub>up</sub>x )',
+ intuition:'The gate decides <i>which</i> of 3072 learned feature detectors fire for this token; the up-projection says <i>what</i> they contribute. Multiplying them lets the network switch circuits on and off per token.',
+ example:'gate ≈ 0 → neuron silenced · gate ≈ 1 → neuron passes through',
+ facts:['SiLU(x) = x · sigmoid(x) — a smooth, non-monotonic ReLU.','Three weight matrices ≈ 9.4 M params per layer — the biggest chunk of each block.','No token ever looks at another token here — pure per-position computation.']},
+residual:{tag:'Level 2 · Signal routing',title:'Residual connection',
+ input:'x and F(x)',output:'x + F(x)',
+ purpose:'The block\'s input flows around the computation unchanged and is added back to the branch output. Every sub-layer therefore learns a correction to the stream, not a replacement of it.',
+ formula:'x<sub>out</sub> = x + F(RMSNorm(x))',
+ intuition:'Think of one river (the residual stream) with 56 small tributaries across 28 blocks. Information from the embedding can reach layer 28 untouched — and gradients ride the same highway backwards, which is what makes 28-layer training stable.',
+ facts:['Identity path has <b>no weights</b> — it is a plain addition.','If a block learns nothing useful, F(x) ≈ 0 and the block is a no-op instead of destroying the signal.','This is why shapes must stay 3×1024 everywhere: you can only add tensors of equal shape.']},
+layers:{tag:'Level 1 · Depth',title:'28 stacked blocks',
+ input:'3 × 1024',output:'3 × 1024',
+ purpose:'The same block architecture repeats 28 times with independent weights. Early layers resolve syntax and local structure; deeper layers assemble long-range meaning and world knowledge.',
+ formula:'x ← Block<sub>ℓ</sub>(x)&nbsp;&nbsp;for ℓ = 1 … 28',
+ intuition:'Each pass adds a finer-grained refinement to every token\'s vector. The shape never changes — only the meaning packed inside the 1024 numbers does.',
+ facts:['Same code, 28 different weight sets.','The hidden state that reaches the output head has been additively refined 56 times (attention + FFN per block).','During generation the KV cache stores keys/values for all 28 layers.']},
+head:{tag:'Level 1 · Prediction',title:'Output head → next token',
+ input:'1 × 1024',output:'151 936 probs',
+ purpose:'Take the final vector of the <b>last</b> token, apply one last RMSNorm, then a linear map to 151 936 logits — one score per vocabulary entry. Softmax turns scores into a probability distribution.',
+ formula:'p = softmax( RMSNorm(h<sub>last</sub>) · Wᵀ )',
+ intuition:'The head asks: which embedding row does this vector point most in the direction of? Because weights are tied, that is literally a dot product with every token\'s embedding.',
+ example:'"I love cats ▁" → " and" 0.31 · "." 0.24 · " because" 0.12 …',
+ facts:['Only the last token\'s vector is used to predict the next token.','Greedy decoding picks the argmax; sampling draws from the distribution (temperature reshapes it).','The chosen token is appended and the whole pass repeats — that is autoregressive generation.']},
+};
+
+/* ================= scene: overview ================= */
+SCENES.overview={
+ id:'overview',title:'Overview',level:0,parent:null,info:INFO.overview,
+ mount(stage){
+  stage.append(sceneHeader('The complete forward pass','From raw text to the next token',
+   'Qwen3-0.6B: vocabulary 151 936 · hidden size 1024 · 28 transformer blocks with grouped-query attention. Click any box to zoom into it; press <code>▶</code> to watch a tensor flow through.'));
+  const boxes=[
+   {id:'input', t:'Input Text', s:'"I love cats"', go:'tokenizer', shape:'"I love cats"'},
+   {id:'tok', t:'Tokenizer', s:'byte-level BPE', go:'tokenizer', badge:'lookup', shape:'3 tokens'},
+   {id:'ids', t:'Token IDs', s:'[ 245, 8172, 12091 ]', go:'tokenizer', shape:'[3] int'},
+   {id:'emb', t:'Embedding', s:'151936 × 1024 · row gather', go:'embedding', badge:'155M params', shape:'3 × 1024'},
+   {id:'hid', t:'Hidden State', s:'3 × 1024 · rows = tokens', go:'embedding', shape:'3 × 1024'},
+   {id:'blocks', t:'Transformer Blocks', s:'RMSNorm → GQA → RMSNorm → SwiGLU', go:'block', badge:'× 28', shape:'3 × 1024'},
+   {id:'fnorm', t:'Final RMSNorm', s:'rescale to unit RMS', go:'rmsnorm', shape:'3 × 1024'},
+   {id:'lmhead', t:'Linear Output Head', s:'1024 → 151936 · tied weights', go:'head', shape:'1 × 151936'},
+   {id:'smax', t:'Softmax', s:'logits → probabilities', go:'head', shape:'Σ = 1'},
+   {id:'pred', t:'Next Token Prediction', s:'" and" · p = 0.31', go:'head', shape:'1 token'},
+  ];
+  const ctx={boxes:{},arrows:[],order:boxes.map(b=>b.id),shapes:{}};
+  const col=h('div',{class:'vcol'});
+  boxes.forEach((b,i)=>{
+   if(i){const a=arrow();ctx.arrows.push(a);col.append(a)}
+   const el=h('div',{class:'flowbox',role:'button',tabindex:'0',
+     onclick:()=>navigate(b.go),
+     onkeydown:e=>{if(e.key==='Enter')navigate(b.go)}},
+    b.badge?h('span',{class:'badge'},b.badge):null,
+    h('div',{class:'bt'},b.t),h('div',{class:'bs'},b.s),
+    h('span',{class:'zoomhint'},'click to zoom ⌕'));
+   ctx.boxes[b.id]=el;ctx.shapes[b.id]=b.shape;
+   col.append(el);
+  });
+  stage.append(col);
+  return ctx;
+ },
+ steps:[
+  {name:'Input text',hold:2000,caption:'Everything starts as a plain string.',
+   run(c){light(c,'input')}},
+  {name:'Tokenize',hold:2400,caption:'BPE splits the string into 3 subword pieces.',
+   info:INFO.tokenizer,run(c,o){step(c,'input','tok','"I love cats"',o)}},
+  {name:'Token IDs',hold:2200,caption:'Each piece becomes an integer index into the vocabulary.',
+   info:INFO.tokenizer,run(c,o){step(c,'tok','ids','3 tokens',o)}},
+  {name:'Embed',hold:2400,caption:'Each ID selects a 1024-dim row of the embedding table.',
+   info:INFO.embedding,run(c,o){step(c,'ids','emb','[3] int',o)}},
+  {name:'Hidden state',hold:2400,caption:'3 tokens × 1024 features — the tensor every block will refine.',
+   info:INFO.embedding,run(c,o){step(c,'emb','hid','3 × 1024',o)}},
+  {name:'28 transformer blocks',hold:3000,caption:'Attention mixes tokens; SwiGLU mixes features — 28 times.',
+   info:INFO.block,run(c,o){step(c,'hid','blocks','3 × 1024',o)}},
+  {name:'Final RMSNorm',hold:2200,caption:'One last rescale before scoring the vocabulary.',
+   info:INFO.rmsnorm,run(c,o){step(c,'blocks','fnorm','3 × 1024',o)}},
+  {name:'Output head',hold:2600,caption:'The last token\'s vector is scored against all 151 936 embeddings.',
+   info:INFO.head,run(c,o){step(c,'fnorm','lmhead','1 × 1024',o)}},
+  {name:'Softmax',hold:2200,caption:'Logits become a probability distribution that sums to 1.',
+   info:INFO.head,run(c,o){step(c,'lmhead','smax','1 × 151936',o)}},
+  {name:'Prediction',hold:2600,caption:'Highest probability wins: " and" (p = 0.31). Append it, repeat.',
+   info:INFO.head,run(c,o){step(c,'smax','pred','Σ = 1',o);c.boxes.pred.style.borderColor='var(--c-gold)';c.boxes.pred.style.boxShadow='0 0 26px rgba(239,203,99,.3)'}},
+ ]
+};
+/* overview helpers */
+function light(c,id){
+  c.order.forEach(k=>c.boxes[k].classList.remove('lit'));
+  c.arrows.forEach(a=>a.classList.remove('lit'));
+  c.boxes[id].classList.add('lit');
+  c.boxes[id].scrollIntoView({block:'nearest',behavior:RM?'auto':'smooth'});
+}
+function step(c,from,to,shapeText,o){
+  const i=c.order.indexOf(to);
+  if(c.arrows[i-1])c.arrows[i-1].classList.add('lit');
+  if(!o.instant)travel(c.boxes[from],c.boxes[to],shapeText,700);
+  setTimeout(()=>light(c,to),o.instant?0:dur(450));
+}
+
+/* ================= scene: tokenizer ================= */
+SCENES.tokenizer={
+ id:'tokenizer',title:'Tokenizer',level:1,parent:'overview',info:INFO.tokenizer,
+ mount(stage){
+  stage.append(sceneHeader('Step 1 · Level 1','Text becomes token IDs',
+   'The model has a fixed vocabulary of <code>151 936</code> subword pieces. Byte-pair encoding finds the longest known pieces in the input and swaps each for its integer index.'));
+  const ctx={};
+  ctx.raw=h('div',{style:{font:'600 30px/1.3 var(--serif)',letterSpacing:'.01em',padding:'18px 30px'}},'"I love cats"');
+  const pieces=[['I','245','var(--t-flow)'],[' love','8172','var(--t-k)'],[' cats','12091','var(--t-v)']];
+  ctx.split=h('div',{class:'hrow rv',style:{gap:'6px'}},
+   pieces.map(([w,,col])=>h('span',{style:{font:'600 30px var(--serif)',padding:'2px 8px',borderRadius:'8px',
+     borderBottom:`3px solid ${col}`,whiteSpace:'pre'}},w)));
+  ctx.cards=pieces.map(([w,id])=>h('div',{class:'tokcard rv',
+    'data-tip':`<div class="tt">Token "${w.trim()}"</div><div class="tm">vocabulary index ${id}</div><div class="td">One of 151 936 entries in Qwen3's BPE vocabulary.</div>`},
+   h('div',{class:'tw'},JSON.stringify(w)),h('div',{class:'tid'},'#'+id)));
+  ctx.seq=h('div',{class:'rv vcol',style:{gap:'10px'}},
+   h('div',{class:'chip flow big'},h('span',{class:'nm'},'token ids'),'[ 245, 8172, 12091 ]'),
+   h('div',{class:'note'},'A tensor of shape <b>[3]</b> — sequence length N = 3. This N never changes inside the network.'));
+  stage.append(h('div',{class:'vcol',style:{gap:'4px'}},
+   ctx.raw,arrow(34),ctx.split,arrow(34),
+   h('div',{class:'hrow'},ctx.cards),arrow(34),ctx.seq));
+  return ctx;
+ },
+ steps:[
+  {name:'Raw string',hold:1800,caption:'The model receives plain UTF-8 text.',
+   run(c){c.raw.style.opacity='1'}},
+  {name:'Split into subwords',hold:2400,caption:'BPE greedily matches the longest vocabulary pieces. Note the leading spaces.',
+   run(c){c.split.classList.add('on')}},
+  {name:'Look up IDs',hold:2600,caption:'Each piece becomes a card carrying its vocabulary index — hover them.',
+   run(c,o){
+    stagger(c.cards,(card,i)=>{card.classList.add('on');if(!o.instant)setTimeout(()=>card.classList.add('lit'),dur(150))},260);
+    if(!o.instant)fly(c.split,c.cards[1],{n:6,ms:700});
+   }},
+  {name:'Integer sequence',hold:2600,caption:'The text is now a [3] tensor of integers — ready to index the embedding table.',
+   run(c){c.seq.classList.add('on')}},
+ ]
+};
+
+/* ================= scene: embedding ================= */
+SCENES.embedding={
+ id:'embedding',title:'Embedding',level:1,parent:'overview',info:INFO.embedding,
+ mount(stage){
+  stage.append(sceneHeader('Step 2 · Level 1','IDs select rows of a 151 936 × 1024 table',
+   'No multiplication happens here — an embedding is a <code>row gather</code>. ID 245 simply copies out row 245: a vector of 1024 learned numbers.'));
+  const ctx={ids:[245,8172,12091],words:['I',' love',' cats']};
+  /* left: the wall */
+  const wall=h('div',{class:'embwall',style:{height:'320px'}});
+  ctx.rowEls=[];
+  const rowsY={245:0.18,8172:0.47,12091:0.78};
+  for(const[id,frac]of Object.entries(rowsY)){
+   const r=h('div',{class:'embrow',style:{top:`calc(${frac*100}% )`}},
+     h('span',{class:'tag'},'row '+id));
+   ctx.rowEls.push(r);wall.append(r);
+  }
+  const wallWrap=h('div',{class:'vcol',style:{gap:'8px'}},
+   h('div',{class:'cap',style:{font:'11.5px var(--mono)',color:'var(--ink-2)'}},
+     h('b',{style:{font:'600 12.5px var(--sans)',color:'var(--ink)'}},'Embedding Matrix '),' 151936 × 1024'),
+   h('div',{class:'hrow',style:{gap:'10px',alignItems:'stretch'}},
+    h('div',{style:{display:'flex',flexDirection:'column',justifyContent:'space-between',
+      font:'10px var(--mono)',color:'var(--ink-3)',padding:'4px 0',textAlign:'right'}},
+      h('span',{},'row 0'),h('span',{},'⋮'),h('span',{},'row 151935')),
+    wall),
+   h('div',{style:{font:'10.5px var(--mono)',color:'var(--ink-3)'}},'← 1024 columns (features) →'));
+  /* right: extracted vectors stacking into X */
+  ctx.vecs=ctx.ids.map((id,i)=>{
+   const m=matrixEl({name:`row ${id}`,shape:'1 × 1024',rows:[vecRow(id,7)],cls:'rv'});
+   m.el.dataset.tip=`<div class="tt">${JSON.stringify(ctx.words[i])} → row ${id}</div><div class="td">1024 learned features. Sampled values shown; hover any cell.</div>`;
+   return m;
+  });
+  ctx.xmat=matrixEl({name:'Hidden state X',shape:'3 × 1024',cls:'rv',
+   rowHds:ctx.words.map((w,i)=>`${w.trim()} · ${ctx.ids[i]}`),
+   rows:ctx.ids.map(id=>vecRow(id,7))});
+  ctx.xmat.el.style.marginTop='6px';
+  const right=h('div',{class:'vcol',style:{gap:'14px',flex:'1'}},
+   ctx.vecs.map(v=>v.el),
+   h('div',{class:'rv',id:'stackArrow'},arrow(30)),
+   ctx.xmat.el,
+   ctx.legend=h('div',{class:'note rv'},'<b>Rows = tokens · Columns = features.</b> This 3 × 1024 tensor is the hidden state — everything downstream just keeps editing it.'));
+  ctx.legend.classList.add('rv');
+  stage.append(h('div',{class:'hrow',style:{alignItems:'flex-start',gap:'44px'}},wallWrap,right));
+  ctx.wall=wall;
+  return ctx;
+ },
+ steps:[
+  {name:'The lookup table',hold:2200,caption:'151 936 rows — one per vocabulary entry — each 1024 numbers wide.',
+   run(){}},
+  {name:'Gather row 245',hold:2400,caption:'Token "I" (ID 245) lights up its row and copies it out.',
+   run(c,o){c.rowEls[0].classList.add('lit');c.vecs[0].el.classList.add('on');
+    if(!o.instant)fly(c.rowEls[0],c.vecs[0].el,{n:8,ms:800})}},
+  {name:'Gather rows 8172, 12091',hold:2600,caption:'" love" and " cats" do the same — three independent lookups.',
+   run(c,o){
+    c.rowEls[1].classList.add('lit');c.rowEls[2].classList.add('lit');
+    c.vecs[1].el.classList.add('on');c.vecs[2].el.classList.add('on');
+    if(!o.instant){fly(c.rowEls[1],c.vecs[1].el,{n:8,ms:800});setTimeout(()=>fly(c.rowEls[2],c.vecs[2].el,{n:8,ms:800}),dur(250))}}},
+  {name:'Stack into a matrix',hold:2800,caption:'Three 1×1024 vectors stack into the hidden state X, shape 3 × 1024.',
+   run(c,o){
+    c.xmat.el.classList.add('on');c.legend.classList.add('on');
+    document.querySelector('#stackArrow')?.classList.add('on');
+    if(!o.instant){c.vecs.forEach((v,i)=>setTimeout(()=>fly(v.el,c.xmat.el,{n:5,ms:650}),dur(i*180)));
+     setTimeout(()=>c.xmat.cells.forEach((cell,i)=>setTimeout(()=>cell.classList.add('pulse'),dur(i*22))),dur(500));
+     setTimeout(()=>c.xmat.cells.forEach(cell=>cell.classList.remove('pulse')),dur(1800));}
+   }},
+ ]
+};
+
+/* ================= scene: transformer block ================= */
+SCENES.block={
+ id:'block',title:'Transformer Block',level:1,parent:'overview',info:INFO.block,
+ mount(stage){
+  stage.append(sceneHeader('Level 1 · repeated ×28','Inside one transformer block',
+   'Pre-norm design: each sub-layer computes on a <code>normalized copy</code> of the stream, and its result is <code>added back</code>. Click Attention or Feed-Forward to explode them.'));
+  const ctx={};
+  const wrap=h('div',{style:{position:'relative',paddingLeft:'90px'}});
+  const svg=sv('svg',{style:'position:absolute;left:0;top:0;pointer-events:none;overflow:visible',width:90,height:10});
+  const mk=(key,t,s,go,tip)=>{
+   const el=h('div',{class:'flowbox',style:{minWidth:'270px'},role:'button',tabindex:'0',
+    onclick:go?()=>navigate(go):null,'data-tip':tip||null,
+    onkeydown:e=>{if(e.key==='Enter'&&go)navigate(go)}},
+    h('div',{class:'bt'},t),s?h('div',{class:'bs'},s):null,
+    go?h('span',{class:'zoomhint'},'click to zoom ⌕'):null);
+   ctx[key]=el;return el;
+  };
+  const plus=key=>{const p=h('div',{class:'op','data-tip':'<div class="tt">Residual addition</div><div class="td">The unchanged input is added to the branch output, elementwise. Shapes must match: 3×1024 + 3×1024.</div>'},'+');ctx[key]=p;return p};
+  const col=h('div',{class:'vcol'},
+   mk('bin','Input x','3 × 1024',null),
+   arrow(26),mk('n1','RMSNorm','rescale each token to unit RMS','rmsnorm'),
+   arrow(26),mk('att','Grouped-Query Attention','tokens exchange information','attention'),
+   arrow(26),plus('p1'),
+   arrow(26),mk('n2','RMSNorm','rescale again before the FFN','rmsnorm'),
+   arrow(26),mk('ff','SwiGLU Feed-Forward','1024 → 3072 → 1024, gated','ffn'),
+   arrow(26),plus('p2'),
+   arrow(26),mk('bout','Output x′','3 × 1024 — same shape, richer meaning',null));
+  ctx.arrows=[...col.querySelectorAll('.arr')];
+  wrap.append(svg,col);
+  stage.append(wrap);
+  stage.append(h('div',{class:'note',style:{marginTop:'20px'}},
+   'The two grey side-paths are the <b>residual connections</b> — click one of the <b>+</b> circles or see the ',
+   h('button',{class:'linkchip',onclick:()=>navigate('residual')},'Residual Stream view'),'.'));
+  /* draw skip paths after layout */
+  ctx.skips=[];
+  requestAnimationFrame(()=>{
+   const z=zoom,wr=wrap.getBoundingClientRect();
+   const yc=el=>{const r=el.getBoundingClientRect();return(r.top+r.height/2-wr.top)/z};
+   const xl=el=>{const r=el.getBoundingClientRect();return(r.left-wr.left)/z};
+   svg.setAttribute('height',wrap.getBoundingClientRect().height/z);
+   const mkPath=(fromEl,toEl,cls)=>{
+    const y0=yc(fromEl),y1=yc(toEl),x1=xl(toEl)-6,x0=xl(fromEl)-6;
+    const p=sv('path',{class:'river-static',d:`M ${x0} ${y0} C 20 ${y0}, 20 ${y1}, ${x1} ${y1}`});
+    const glow=sv('path',{class:'river-main',style:'opacity:0',d:p.getAttribute('d')});
+    svg.append(p,glow);ctx.skips.push(glow);
+   };
+   mkPath(ctx.bin,ctx.p1);
+   mkPath(ctx.p1,ctx.p2);
+  });
+  return ctx;
+ },
+ steps:[
+  {name:'Input arrives',hold:2000,caption:'The hidden state from the previous block (or the embedding).',
+   run(c){blockLight(c,'bin')}},
+  {name:'RMSNorm',hold:2200,caption:'Normalize a copy of the stream — the original x is kept aside for the skip.',
+   info:INFO.rmsnorm,run(c,o){blockGo(c,'bin','n1','3 × 1024',o,0)}},
+  {name:'Attention',hold:2600,caption:'Tokens look at each other and blend values (click the box for the full simulation).',
+   info:INFO.attention,run(c,o){blockGo(c,'n1','att','3 × 1024',o,1)}},
+  {name:'Residual add №1',hold:2600,caption:'x + Attn(norm(x)) — the untouched input rejoins via the side path.',
+   info:INFO.residual,run(c,o){blockGo(c,'att','p1','3 × 1024',o,2);c.skips[0]&&(c.skips[0].style.opacity='1',c.skips[0].classList.add('river-anim'))}},
+  {name:'RMSNorm again',hold:2000,caption:'Fresh normalization before the feed-forward branch.',
+   info:INFO.rmsnorm,run(c,o){blockGo(c,'p1','n2','3 × 1024',o,3)}},
+  {name:'SwiGLU Feed-Forward',hold:2600,caption:'Each token expands to 3072 gated features and back (click to explode).',
+   info:INFO.ffn,run(c,o){blockGo(c,'n2','ff','3 × 1024',o,4)}},
+  {name:'Residual add №2',hold:2400,caption:'x + FFN(norm(x)) — second merge back into the stream.',
+   info:INFO.residual,run(c,o){blockGo(c,'ff','p2','3 × 1024',o,5);c.skips[1]&&(c.skips[1].style.opacity='1',c.skips[1].classList.add('river-anim'))}},
+  {name:'Block output',hold:2400,caption:'Still 3 × 1024 — ready to be fed to the next of the 28 blocks.',
+   run(c,o){blockGo(c,'p2','bout','3 × 1024',o,6)}},
+ ]
+};
+function blockLight(c,key){
+  ['bin','n1','att','p1','n2','ff','p2','bout'].forEach(k=>c[k]?.classList.remove('lit'));
+  c[key].classList.add('lit');
+  c[key].scrollIntoView({block:'nearest',behavior:RM?'auto':'smooth'});
+}
+function blockGo(c,from,to,shape,o,arrIdx){
+  if(c.arrows[arrIdx]!=null)c.arrows.slice(0,arrIdx+1).forEach(a=>a.classList.add('lit'));
+  if(!o.instant)travel(c[from],c[to],shape,650);
+  setTimeout(()=>blockLight(c,to),o.instant?0:dur(400));
+}
+
+/* ================= scene: attention (level 2) ================= */
+const ATT_W=[[1.00,0,0],[0.28,0.72,0],[0.11,0.62,0.27]];
+const ATT_S=[['3.10',null,null],['1.40','2.35',null],['0.90','2.60','1.77']];
+const ATT_WORDS=['I','love','cats'];
+SCENES.attention={
+ id:'attention',title:'Attention',level:2,parent:'block',info:INFO.attention,
+ mount(stage){
+  stage.append(sceneHeader('Level 2 · token mixing','Attention, computed in front of you',
+   'One question per token — <code>Q</code>, what am I looking for? <code>K</code>, what do I contain? <code>V</code>, what do I contribute? Hover everything.'));
+  const ctx={};
+  /* — X — */
+  ctx.xmat=matrixEl({name:'Normalized hidden state X',shape:'3 × 1024',
+   rowHds:ATT_WORDS,rows:[245,8172,12091].map(id=>vecRow(id+7,5))});
+  /* — projections — */
+  const projCol=(cls,wname,wshape,rname,rshape,tip,seed,cols)=>{
+   const wb=h('div',{class:'wbox '+cls},h('b',{},wname),h('span',{},wshape));
+   const m=matrixEl({name:rname,shape:rshape,cls:'rv',rowHds:ATT_WORDS,
+     rows:[0,1,2].map(r=>vecRow(seed+r*13,cols))});
+   m.el.dataset.tip=tip;
+   const colEl=h('div',{class:'vcol',style:{gap:'0'}},arrow(24),wb,arrow(24),m.el);
+   return{wb,m,colEl};
+  };
+  ctx.pq=projCol('q','Wq','1024 × 2048','Query Q','3 × 2048',
+   '<div class="tt">Query — “What am I looking for?”</div><div class="td">“cats” builds a query asking: which earlier token is relevant to me — e.g. who does the loving?</div><div class="tm">then: per-head RMSNorm + RoPE</div>',311,4);
+  ctx.pk=projCol('k','Wk','1024 × 1024','Key K','3 × 1024',
+   '<div class="tt">Key — “What information do I contain?”</div><div class="td">Each token advertises its content so that other tokens’ queries can match against it.</div><div class="tm">then: per-head RMSNorm + RoPE</div>',521,4);
+  ctx.pv=projCol('v','Wv','1024 × 1024','Value V','3 × 1024',
+   '<div class="tt">Value — “What should I contribute?”</div><div class="td">The payload actually blended into other tokens once attention decides the weights.</div>',737,4);
+  ctx.secProj=h('div',{class:'hrow rv',style:{gap:'34px',alignItems:'flex-start'}},
+   ctx.pq.colEl,ctx.pk.colEl,ctx.pv.colEl);
+  /* — heads note — */
+  ctx.secHeads=h('div',{class:'rv vcol',style:{gap:'8px',marginTop:'18px'}},
+   h('div',{class:'hrow',style:{gap:'10px'}},
+    h('span',{class:'chip q'},'Q → 16 heads × 128'),
+    h('span',{class:'chip k'},'K → 8 heads × 128'),
+    h('span',{class:'chip v'},'V → 8 heads × 128'),
+    h('button',{class:'linkchip',onclick:()=>navigate('gqa')},'why 16 vs 8? → GQA')),
+   h('div',{class:'note'},'Each pair of query heads shares one K/V head. Everything below shows <b>head 1</b> of 16, where vectors are 128-dim.'));
+  /* — scores — */
+  ctx.smat=matrixEl({name:'Scores QKᵀ / √128',shape:'3 × 3',rowHds:ATT_WORDS,colHds:ATT_WORDS,
+   rows:ATT_S.map(r=>r.map(v=>v==null?'−∞':v)),hidden:true,
+   cellCls:(r,c2)=>ATT_S[r][c2]==null?'masked':''});
+  ctx.secScores=h('div',{class:'rv vcol',style:{gap:'10px',marginTop:'18px'}},
+   h('div',{class:'hrow',style:{gap:'12px'}},
+    h('span',{class:'chip q big'},'Q₁ · 3 × 128'),h('span',{class:'op'},'×'),
+    h('span',{class:'chip k big'},'K₁ᵀ · 128 × 3'),h('span',{class:'op'},'='),
+    ctx.smat.el),
+   h('div',{class:'note'},'Row i, column j = how strongly token i’s query matches token j’s key. Hatched cells are the <b>causal mask</b>: no peeking at the future, so they are −∞.'));
+  /* — softmax heatmap — */
+  ctx.hmat=matrixEl({name:'Attention weights',shape:'3 × 3 · rows sum to 1',rowHds:ATT_WORDS,colHds:ATT_WORDS,
+   rows:ATT_W.map(r=>r.map(v=>v.toFixed(2))),hidden:true,
+   cellCls:(r,c2)=>'heat'+(ATT_W[r][c2]<0.45?' lo':'')});
+  ctx.hmat.cells.forEach((cell,i)=>{
+   const r=Math.floor(i/3),c2=i%3,w=ATT_W[r][c2];
+   cell.dataset.tip=`<div class="tt">“${ATT_WORDS[r]}” attends to “${ATT_WORDS[c2]}”</div><div class="tm">weight = ${w.toFixed(2)}</div><div class="td">${w===0?'Masked: “'+ATT_WORDS[c2]+'” comes later, so it is invisible.':Math.round(w*100)+'% of “'+ATT_WORDS[r]+'”’s update comes from “'+ATT_WORDS[c2]+'”.'}</div>`;
+  });
+  ctx.secSoft=h('div',{class:'rv vcol',style:{gap:'10px',marginTop:'18px'}},
+   h('div',{class:'hrow',style:{gap:'12px'}},
+    h('span',{class:'chip flow big'},'softmax over each row'),h('span',{class:'op'},'→'),ctx.hmat.el),
+   h('div',{class:'note'},'e-to-the-score, renormalized: each row becomes a probability distribution. Brighter cell = more attention. <b>Hover the cells.</b>'));
+  /* — context — */
+  ctx.cmat=matrixEl({name:'Context (head 1)',shape:'3 × 128',cls:'rv',rowHds:ATT_WORDS,
+   rows:[0,1,2].map(r=>vecRow(911+r*17,4))});
+  ctx.secCtx=h('div',{class:'rv vcol',style:{gap:'10px',marginTop:'18px'}},
+   h('div',{class:'hrow',style:{gap:'12px'}},
+    h('span',{class:'chip flow big'},'A · 3 × 3'),h('span',{class:'op'},'×'),
+    h('span',{class:'chip v big'},'V₁ · 3 × 128'),h('span',{class:'op'},'='),ctx.cmat.el),
+   h('div',{class:'note',id:'blendNote'},
+    'Row “cats” literally becomes &nbsp;<span style="color:var(--t-flow)">0.11</span>·v(I) + <span style="color:var(--t-flow)">0.62</span>·v(love) + <span style="color:var(--t-flow)">0.27</span>·v(cats) — a value-blend weighted by attention. All 16 heads run this in parallel and concatenate: <b>3 × 2048</b>.'));
+  /* — output projection — */
+  ctx.wo=h('div',{class:'wbox n'},h('b',{},'Wo'),h('span',{},'2048 × 1024'));
+  ctx.omat=matrixEl({name:'Attention output',shape:'3 × 1024',cls:'rv',rowHds:ATT_WORDS,
+   rows:[0,1,2].map(r=>vecRow(1201+r*31,5))});
+  ctx.secOut=h('div',{class:'rv vcol',style:{gap:'10px',marginTop:'18px'}},
+   h('div',{class:'hrow',style:{gap:'14px'}},
+    h('span',{class:'chip flow big'},'heads concat · 3 × 2048'),h('span',{class:'op'},'→'),ctx.wo,h('span',{class:'op'},'→'),ctx.omat.el),
+   h('div',{class:'note'},'The output projection mixes all heads back into the model width: <b>2048 → 1024</b>. This tensor now rides the residual connection back into the stream.'));
+  stage.append(h('div',{class:'vcol',style:{gap:'0'}},
+   ctx.xmat.el,ctx.secProj,ctx.secHeads,ctx.secScores,ctx.secSoft,ctx.secCtx,ctx.secOut));
+  return ctx;
+ },
+ steps:[
+  {name:'Normalized input X',hold:2000,caption:'3 tokens × 1024 features, fresh out of RMSNorm.',
+   run(c){c.xmat.el.scrollIntoView({block:'nearest',behavior:RM?'auto':'smooth'})}},
+  {name:'Project Q',hold:2400,caption:'X · Wq → Query, 3 × 2048. Hover the Q card: “what am I looking for?”',
+   run(c,o){c.secProj.classList.add('on');c.pq.m.el.classList.add('on');c.pq.wb.classList.add('lit');
+    if(!o.instant)fly(c.xmat.el,c.pq.m.el,{color:'var(--t-q)',n:8,ms:850})}},
+  {name:'Project K and V',hold:2600,caption:'Same X, two more matrices: Key 3 × 1024 and Value 3 × 1024.',
+   run(c,o){c.pk.m.el.classList.add('on');c.pv.m.el.classList.add('on');
+    c.pk.wb.classList.add('lit');c.pv.wb.classList.add('lit');
+    if(!o.instant){fly(c.xmat.el,c.pk.m.el,{color:'var(--t-k)',n:8,ms:850});
+     setTimeout(()=>fly(c.xmat.el,c.pv.m.el,{color:'var(--t-v)',n:8,ms:850}),dur(220))}}},
+  {name:'Split into heads',hold:2600,caption:'16 query heads but only 8 shared KV heads — that asymmetry is GQA.',
+   info:INFO.gqa,run(c){c.secHeads.classList.add('on');c.secHeads.scrollIntoView({block:'nearest',behavior:RM?'auto':'smooth'})}},
+  {name:'Scores = QKᵀ / √d',hold:3200,caption:'Every query dotted with every key — watch the 3×3 matrix fill, cell by cell.',
+   run(c,o){c.secScores.classList.add('on');c.secScores.scrollIntoView({block:'nearest',behavior:RM?'auto':'smooth'});
+    const order=[0,3,4,6,7,8,1,2,5];
+    order.forEach((idx,k)=>setTimeout(()=>{
+     const cell=c.smat.cells[idx];cell.classList.remove('hide');
+     if(!cell.classList.contains('masked')){cell.classList.add('pulse');setTimeout(()=>cell.classList.remove('pulse'),dur(500))}
+    },o.instant?0:dur(260)*k));}},
+  {name:'Softmax → attention matrix',hold:3200,caption:'Each row exponentiates and renormalizes into weights that sum to 1.',
+   run(c,o){c.secSoft.classList.add('on');c.secSoft.scrollIntoView({block:'nearest',behavior:RM?'auto':'smooth'});
+    c.hmat.cells.forEach((cell,i)=>{
+     const r=Math.floor(i/3),c2=i%3,w=ATT_W[r][c2];
+     setTimeout(()=>{cell.classList.remove('hide');
+      cell.style.background=`color-mix(in srgb, var(--c-flow) ${Math.round(w*88)}%, rgba(6,9,16,.7))`;
+      if(w>0.5)cell.style.boxShadow='0 0 12px rgba(46,159,198,.5)';
+     },o.instant?0:dur(140)*i);});
+    if(!o.instant)fly(c.smat.el,c.hmat.el,{n:6,ms:700});}},
+  {name:'Context = A × V',hold:3200,caption:'Weights sweep across the values: each token becomes a blend of what it attended to.',
+   run(c,o){c.secCtx.classList.add('on');c.cmat.el.classList.add('on');
+    c.secCtx.scrollIntoView({block:'nearest',behavior:RM?'auto':'smooth'});
+    if(!o.instant){fly(c.hmat.el,c.cmat.el,{n:6,ms:800});
+     setTimeout(()=>fly(c.pv.m.el,c.cmat.el,{color:'var(--t-v)',n:8,ms:900}),dur(200));
+     setTimeout(()=>c.cmat.cells.forEach((cell,i)=>setTimeout(()=>{cell.classList.add('pulse');setTimeout(()=>cell.classList.remove('pulse'),dur(450))},dur(60)*i)),dur(700));}}},
+  {name:'Output projection',hold:3000,caption:'Concat 16 heads (3×2048), multiply by Wo → back to 3×1024 for the residual add.',
+   run(c,o){c.secOut.classList.add('on');c.omat.el.classList.add('on');c.wo.classList.add('lit');
+    c.secOut.scrollIntoView({block:'nearest',behavior:RM?'auto':'smooth'});
+    if(!o.instant)fly(c.cmat.el,c.omat.el,{n:9,ms:900});}},
+ ]
+};
+
+/* ================= scene: GQA (level 2) ================= */
+SCENES.gqa={
+ id:'gqa',title:'Grouped-Query Attention',level:2,parent:'attention',info:INFO.gqa,
+ mount(stage){
+  stage.append(sceneHeader('Level 2 · why Qwen3 is fast','Sixteen questions, eight answers',
+   'Classic multi-head attention gives every head its own K and V. Qwen3 keeps all 16 query heads but lets <code>pairs share</code> one K/V head — showing 4 Q heads below for clarity.'));
+  const ctx={};
+  ctx.title=h('div',{style:{font:'600 14px var(--sans)',color:'var(--ink-2)',textAlign:'center'}},'Multi-Head Attention — every head owns its K and V');
+  ctx.heads=[];ctx.kchips=[];ctx.vchips=[];
+  const row=h('div',{class:'hrow',style:{gap:'18px'}});
+  for(let i=1;i<=4;i++){
+   const kc=h('span',{class:'minichip k'},'K'+i),vc=h('span',{class:'minichip v'},'V'+i);
+   ctx.kchips.push(kc);ctx.vchips.push(vc);
+   const card=h('div',{class:'headcard'},h('div',{class:'hlab'},'head '+i),
+    h('span',{class:'minichip q'},'Q'+i),kc,vc);
+   ctx.heads.push(card);row.append(card);
+  }
+  /* shared KV row */
+  ctx.sharedA=h('div',{class:'headcard rv',style:{minWidth:'150px'}},h('div',{class:'hlab'},'shared by heads 1–2'),
+   h('span',{class:'minichip k'},'K·A'),h('span',{class:'minichip v'},'V·A'));
+  ctx.sharedB=h('div',{class:'headcard rv',style:{minWidth:'150px'}},h('div',{class:'hlab'},'shared by heads 3–4'),
+   h('span',{class:'minichip k'},'K·B'),h('span',{class:'minichip v'},'V·B'));
+  ctx.sharedRow=h('div',{class:'hrow',style:{gap:'60px',marginTop:'6px'}},ctx.sharedA,ctx.sharedB);
+  /* kv cache bars */
+  ctx.fillB=h('div',{class:'kvfill',style:{width:'0%'}});
+  ctx.fillA=h('div',{class:'kvfill',style:{width:'0%'}});
+  ctx.labB=h('span',{},'—');ctx.labA=h('span',{},'—');
+  ctx.cache=h('div',{class:'rv vcol',style:{gap:'16px',marginTop:'26px'}},
+   h('div',{style:{font:'600 14px var(--sans)'}},'KV cache per token, per layer'),
+   h('div',{class:'kv'},
+    h('div',{class:'kvlab'},h('span',{},'MHA · 16 KV heads'),ctx.labB),
+    h('div',{class:'kvtrack'},ctx.fillB)),
+   h('div',{class:'kv'},
+    h('div',{class:'kvlab'},h('span',{},'GQA · 8 KV heads'),ctx.labA),
+    h('div',{class:'kvtrack'},ctx.fillA)));
+  ctx.payoff=h('div',{class:'hrow rv',style:{gap:'12px',marginTop:'22px'}},
+   ['−50 % KV memory','faster decoding','≈ same quality'].map(t=>
+    h('span',{class:'chip k big'},t)));
+  stage.append(h('div',{class:'vcol',style:{gap:'16px'}},
+   ctx.title,row,arrow(30),ctx.sharedRow,ctx.cache,ctx.payoff));
+  return ctx;
+ },
+ steps:[
+  {name:'Standard multi-head attention',hold:2600,caption:'Four independent triples — every head computes and caches its own K and V.',
+   run(c){}},
+  {name:'Morph into GQA',hold:3400,caption:'Neighboring heads pool their K and V into one shared pair. Queries stay independent.',
+   run(c,o){
+    c.title.textContent='Grouped-Query Attention — pairs of Q heads share one K/V';
+    const land=t=>{[0,1,2,3].forEach(i=>{c.kchips[i].style.opacity='0';c.vchips[i].style.opacity='0'});
+     c.sharedA.classList.add('on');c.sharedB.classList.add('on')};
+    if(o.instant){land();return}
+    [0,1,2,3].forEach(i=>{
+     const tgt=i<2?c.sharedA:c.sharedB;
+     [c.kchips[i],c.vchips[i]].forEach((chipEl,j)=>{
+      const cr=chipEl.getBoundingClientRect(),tr=tgt.getBoundingClientRect();
+      chipEl.animate([{transform:'translate(0,0)'},{transform:`translate(${(tr.left+tr.width/2-cr.left-cr.width/2)}px,${(tr.top+40-cr.top)}px)`,opacity:.15}],
+       {duration:dur(950),delay:dur(90)*(i*2+j),easing:'cubic-bezier(.5,0,.3,1)',fill:'forwards'});
+     });
+    });
+    setTimeout(land,dur(1250));
+   }},
+  {name:'KV cache shrinks',hold:3400,caption:'2 · heads · 128 values per token per layer: 4096 → 2048. Watch memory halve.',
+   run(c,o){
+    c.cache.classList.add('on');
+    const go=()=>{c.fillB.style.width='100%';c.labB.textContent='2 × 16 × 128 = 4096 values';
+     setTimeout(()=>{c.fillA.style.width='50%';c.labA.textContent='2 × 8 × 128 = 2048 values'},o.instant?0:dur(900))};
+    o.instant?go():setTimeout(go,dur(150));
+   }},
+  {name:'Why it works',hold:2800,caption:'Queries need diversity; stored content doesn’t. Less memory, faster inference, same quality.',
+   run(c){c.payoff.classList.add('on')}},
+ ]
+};
+
+/* numeric tween for morphing values */
+function tweenText(el,from,to,ms,fmt=v=>v.toFixed(2)){
+  if(RM){el.textContent=fmt(to);return}
+  const t0=performance.now(),d=dur(ms);
+  (function frame(t){
+   const p=Math.min(1,(t-t0)/d),e=1-Math.pow(1-p,3);
+   el.textContent=fmt(from+(to-from)*e);
+   if(p<1)requestAnimationFrame(frame);
+  })(t0);
+}
+
+/* ================= scene: RMSNorm (level 2) ================= */
+SCENES.rmsnorm={
+ id:'rmsnorm',title:'RMSNorm',level:2,parent:'block',info:INFO.rmsnorm,
+ mount(stage){
+  stage.append(sceneHeader('Level 2 · numerical stability','Taming runaway activations',
+   'After dozens of residual additions, feature values drift to wildly different magnitudes. RMSNorm divides each token\'s vector by its <code>root-mean-square</code>, putting every token back on a common scale.'));
+  const ctx={raw:[18,241,-55,900]};
+  const rms=Math.sqrt(ctx.raw.reduce((s,x)=>s+x*x,0)/ctx.raw.length+1e-6);
+  ctx.rms=rms;ctx.normed=ctx.raw.map(x=>x/rms);
+  const mkCol=(v,i)=>{
+   const num=h('div',{style:{font:'600 20px var(--mono)',fontVariantNumeric:'tabular-nums',transition:'color .4s'}},String(v));
+   const bar=h('div',{style:{width:'26px',borderRadius:'5px 5px 0 0',background:'var(--c-q)',
+     height:Math.max(3,Math.abs(v)/900*110)+'px',transition:'height .9s cubic-bezier(.5,0,.3,1), background .5s'}});
+   return{num,bar,el:h('div',{class:'vcol',style:{gap:'8px',justifyContent:'flex-end'}},num,
+    h('div',{style:{height:'116px',display:'flex',alignItems:'flex-end'}},bar),
+    h('div',{style:{font:'10.5px var(--mono)',color:'var(--ink-3)'}},'x'+i))};
+  };
+  ctx.cols=ctx.raw.map(mkCol);
+  ctx.rmsChip=h('div',{class:'chip flow big rv'},h('span',{class:'nm'},'RMS'),'√(mean(x²)) = '+rms.toFixed(1));
+  ctx.gammaNote=h('div',{class:'note rv'},'Then each feature is scaled by its own learned gain: <b>y = x̂ · γ</b> (1024 learned numbers, no bias). Four of 1024 features shown.');
+  stage.append(h('div',{class:'panel glass vcol',style:{gap:'20px',padding:'26px 40px'}},
+   h('div',{class:'hrow',style:{gap:'30px',alignItems:'flex-end'}},ctx.cols.map(c=>c.el)),
+   ctx.rmsChip,ctx.gammaNote));
+  stage.append(h('div',{class:'note',style:{marginTop:'18px'}},
+   'LayerNorm subtracts the mean first; RMSNorm skips that — <b>cheaper, equally stable</b>. Qwen3 uses it before attention, before the FFN, on Q and K inside attention, and once at the very end.'));
+  return ctx;
+ },
+ steps:[
+  {name:'Wild magnitudes in',hold:2400,caption:'One token\'s features: 18, 241, −55, 900 — three orders of magnitude apart.',
+   run(c){}},
+  {name:'Measure the RMS',hold:2600,caption:'Square every value, average, square-root: RMS = 466.8 for this vector.',
+   run(c,o){c.rmsChip.classList.add('on');
+    if(!o.instant)c.cols.forEach((col,i)=>setTimeout(()=>{col.num.style.color='var(--t-flow)';setTimeout(()=>col.num.style.color='',dur(500))},dur(160)*i));}},
+  {name:'Divide — normalize',hold:3000,caption:'Every value ÷ 466.8. Same directions, tamed scale: unit RMS.',
+   run(c,o){
+    c.cols.forEach((col,i)=>{
+     tweenText(col.num,c.raw[i],c.normed[i],o.instant?1:1100);
+     col.bar.style.background='var(--c-k)';
+     col.bar.style.height=Math.max(3,Math.abs(c.normed[i])/2*110)+'px';
+    });}},
+  {name:'Learned gain γ',hold:2600,caption:'A per-feature volume knob lets the model undo the parts of normalization it doesn\'t want.',
+   run(c){c.gammaNote.classList.add('on')}},
+ ]
+};
+
+/* ================= scene: SwiGLU FFN (level 2) ================= */
+SCENES.ffn={
+ id:'ffn',title:'SwiGLU Feed-Forward',level:2,parent:'block',info:INFO.ffn,
+ mount(stage){
+  stage.append(sceneHeader('Level 2 · per-token computation','SwiGLU: a gate decides which neurons fire',
+   'Each token expands from 1024 to 3072 features along <code>two parallel paths</code> — one carries content, one carries a gate — then multiplies them and projects back down. Showing 20 of 3072 neurons.'));
+  const ctx={};
+  const r=rng(4242);
+  ctx.gateVals=Array.from({length:20},()=>(r()*2-1)*2.4);
+  const silu=x=>x/(1+Math.exp(-x));
+  /* silu curve */
+  let d='';for(let px=0;px<=120;px+=3){const x=(px/120)*8-4,y=silu(x);d+=(px?'L':'M')+px+' '+(34-y*8)+' '}
+  const curve=sv('svg',{width:120,height:46,style:'overflow:visible'},
+   sv('line',{x1:0,y1:34,x2:120,y2:34,stroke:'var(--line-2)','stroke-width':1}),
+   sv('path',{d,fill:'none',stroke:'var(--t-k)','stroke-width':2}));
+  ctx.gateBox=h('div',{class:'vcol glass rv',style:{gap:'6px',padding:'12px 18px'}},
+   h('div',{class:'hrow',style:{gap:'10px'}},h('div',{class:'wbox k'},h('b',{},'W gate'),h('span',{},'1024 × 3072')),
+    h('div',{class:'vcol',style:{gap:'2px'}},curve,h('span',{style:{font:'10.5px var(--mono)',color:'var(--t-k)'}},'SiLU(x) = x·σ(x)'))),
+   h('span',{class:'chip k'},'gate · 3 × 3072'));
+  ctx.upBox=h('div',{class:'vcol glass rv',style:{gap:'6px',padding:'12px 18px'}},
+   h('div',{class:'wbox v'},h('b',{},'W up'),h('span',{},'1024 × 3072')),
+   h('span',{class:'chip v'},'candidates · 3 × 3072'));
+  ctx.neurons=ctx.gateVals.map(g=>{
+   const gs=silu(g);
+   return h('div',{class:'neuron','data-tip':`<div class="tt">Neuron</div><div class="tm">gate SiLU(${g.toFixed(2)}) = ${gs.toFixed(2)}</div><div class="td">${gs>0.4?'Gate open — this feature passes through.':gs<0.05?'Gate closed — suppressed for this token.':'Partially open.'}</div>`});
+  });
+  ctx.mulRow=h('div',{class:'rv vcol',style:{gap:'10px'}},
+   h('div',{class:'hrow',style:{gap:'10px'}},h('span',{class:'op'},'⊙'),
+    h('span',{style:{font:'600 13.5px var(--sans)'}},'elementwise multiply: gate × candidates')),
+   h('div',{class:'neuronrow'},ctx.neurons),
+   h('div',{class:'note',id:'ffnNote'},'Bright = gate open, feature contributes. Dim = gate ≈ 0, feature silenced <b>for this token specifically</b>.'));
+  ctx.downBox=h('div',{class:'rv vcol',style:{gap:'8px'}},
+   h('div',{class:'wbox n'},h('b',{},'W down'),h('span',{},'3072 × 1024')),
+   h('span',{class:'chip flow big'},'output · 3 × 1024'));
+  ctx.inChip=h('span',{class:'chip flow big'},'input · 3 × 1024');
+  stage.append(h('div',{class:'vcol',style:{gap:'14px'}},
+   ctx.inChip,arrow(26),
+   h('div',{class:'hrow',style:{gap:'40px',alignItems:'flex-start'}},ctx.gateBox,ctx.upBox),
+   arrow(26),ctx.mulRow,arrow(26),ctx.downBox));
+  return ctx;
+ },
+ steps:[
+  {name:'One token enters',hold:2000,caption:'The FFN treats every token independently — no cross-token traffic here.',
+   run(c){}},
+  {name:'Two parallel expansions',hold:2800,caption:'The same 1024-vector hits W-gate and W-up, producing two 3072-wide vectors.',
+   run(c,o){c.gateBox.classList.add('on');c.upBox.classList.add('on');
+    if(!o.instant){fly(c.inChip,c.gateBox,{color:'var(--t-k)',n:7,ms:800});
+     setTimeout(()=>fly(c.inChip,c.upBox,{color:'var(--t-v)',n:7,ms:800}),dur(180))}}},
+  {name:'Neurons light up',hold:2600,caption:'3072 candidate features activate — before gating, everything is on the table.',
+   run(c,o){c.mulRow.classList.add('on');
+    stagger(c.neurons,n=>n.classList.add('hot'),o.instant?0:55);}},
+  {name:'The gate censors',hold:3200,caption:'SiLU gate values multiply in: features the gate dislikes are squeezed toward zero.',
+   run(c,o){
+    const silu=x=>x/(1+Math.exp(-x));
+    c.neurons.forEach((n,i)=>setTimeout(()=>{
+     const g=silu(c.gateVals[i]);
+     if(g<0.4){n.classList.remove('hot');n.classList.add('cold')}
+    },o.instant?0:dur(90)*i));}},
+  {name:'Project back down',hold:2800,caption:'W-down mixes the surviving features into a 1024-dim update, ready for the residual add.',
+   run(c,o){c.downBox.classList.add('on');
+    if(!o.instant)fly(c.mulRow,c.downBox,{n:9,ms:850});}},
+ ]
+};
+
+/* ================= scene: residual stream (level 2) ================= */
+SCENES.residual={
+ id:'residual',title:'Residual Stream',level:2,parent:'block',info:INFO.residual,
+ mount(stage){
+  stage.append(sceneHeader('Level 2 · signal routing','Two rivers, one stream',
+   'The input flows straight through on an identity highway while a branch dips into the computation. They <code>merge by addition</code> — so every block contributes a delta, never a replacement.'));
+  const ctx={};
+  const W=680,H=300;
+  const mainD=`M 30 70 H ${W-110}`,branchD=`M 120 70 C 170 70 170 190 230 190 H 400 C 470 190 470 70 ${W-160} 70`;
+  ctx.mainGlow=sv('path',{class:'river-main',style:'opacity:0',d:mainD});
+  ctx.branchGlow=sv('path',{class:'river-branch',style:'opacity:0',d:branchD});
+  ctx.plus=sv('g',{style:'opacity:.45;transition:opacity .5s'},
+   sv('circle',{cx:W-140,cy:70,r:17,fill:'var(--bg-2)',stroke:'var(--line-2)','stroke-width':1.5}),
+   sv('text',{x:W-140,y:76,'text-anchor':'middle',fill:'var(--ink)','font-size':18,'font-family':'var(--mono)'},'+'));
+  ctx.fbox=sv('g',{style:'opacity:.55;transition:opacity .5s'},
+   sv('rect',{x:230,y:160,width:170,height:60,rx:12,fill:'rgba(148,163,190,.07)',stroke:'var(--line-2)'}),
+   sv('text',{x:315,y:186,'text-anchor':'middle',fill:'var(--ink)','font-size':13.5,'font-weight':600,'font-family':'var(--sans)'},'F  =  Attention / FFN'),
+   sv('text',{x:315,y:205,'text-anchor':'middle',fill:'var(--ink-2)','font-size':11,'font-family':'var(--mono)'},'F(RMSNorm(x))'));
+  ctx.outLab=sv('g',{style:'opacity:0;transition:opacity .6s'},
+   sv('text',{x:W-95,y:62,fill:'var(--t-gold)','font-size':13,'font-family':'var(--mono)'},'x + F(x)'),
+   sv('text',{x:W-95,y:80,fill:'var(--ink-2)','font-size':11,'font-family':'var(--sans)'},'improved'));
+  const svgEl=sv('svg',{width:W,height:H,viewBox:`0 0 ${W} ${H}`,style:'max-width:100%'},
+   sv('path',{class:'river-static',d:mainD}),
+   sv('path',{class:'river-static',d:branchD}),
+   ctx.mainGlow,ctx.branchGlow,ctx.fbox,ctx.plus,
+   sv('text',{x:30,y:56,fill:'var(--t-flow)','font-size':13,'font-family':'var(--mono)'},'x · 3 × 1024'),
+   sv('text',{x:30,y:100,fill:'var(--ink-3)','font-size':11,'font-family':'var(--sans)'},'identity highway — no weights'),
+   sv('path',{class:'head',d:`M ${W-104} 70 l -10 -5 v 10 z`,fill:'var(--line-2)'}),
+   ctx.outLab);
+  stage.append(h('div',{class:'glass panel'},svgEl));
+  ctx.why=h('div',{class:'note rv',style:{marginTop:'18px'}},
+   '<b>Why it matters:</b> gradients flow backwards along the same highway, so training a 28-block stack stays stable — and a block that has nothing to add can simply output F(x) ≈ 0.');
+  stage.append(ctx.why);
+  return ctx;
+ },
+ steps:[
+  {name:'The highway',hold:2400,caption:'The input x rides straight across, completely untouched.',
+   run(c){c.mainGlow.style.opacity='1';c.mainGlow.classList.add('river-anim')}},
+  {name:'The tributary',hold:2600,caption:'A copy dips down into the sub-layer and comes back as F(x) — the proposed update.',
+   run(c){c.branchGlow.style.opacity='1';c.branchGlow.classList.add('river-anim');c.fbox.style.opacity='1'}},
+  {name:'Merge by addition',hold:2600,caption:'x + F(x): the original signal survives; the block contributed a refinement.',
+   run(c){c.plus.style.opacity='1';c.outLab.style.opacity='1'}},
+  {name:'The gradient highway',hold:2600,caption:'This happens 56 times across 28 blocks — one continuous stream from embedding to output head.',
+   run(c){c.why.classList.add('on')}},
+ ]
+};
+
+/* ================= scene: all 28 layers ================= */
+SCENES.layers={
+ id:'layers',title:'All 28 Layers',level:1,parent:'overview',info:INFO.layers,
+ mount(stage){
+  stage.append(sceneHeader('Level 1 · depth','The same block, twenty-eight times',
+   'Identical architecture, independent weights. Watch the hidden state get refined layer after layer — the shape never changes, the meaning does.'));
+  const ctx={bars:[]};
+  const col=h('div',{class:'vcol',style:{gap:'5px'}});
+  for(let i=1;i<=28;i++){
+   const detail=i<=3?h('span',{style:{color:'var(--ink-3)',fontSize:'10.5px'}},'RMSNorm → GQA → RMSNorm → SwiGLU'):null;
+   const b=h('div',{class:'layerbar',role:'button',tabindex:'0',onclick:()=>navigate('block'),
+     style:i<=3?{padding:'10px 14px'}:null,
+     onkeydown:e=>{if(e.key==='Enter')navigate('block')}},
+    h('span',{},'Layer '+i),detail,h('span',{class:'lstate',style:{color:'var(--ink-3)'}},'·'));
+   ctx.bars.push(b);col.append(b);
+  }
+  ctx.outNote=h('div',{class:'rv vcol',style:{gap:'10px',marginTop:'16px'}},
+   h('span',{class:'chip flow big'},'hidden state · 3 × 1024 · refined ×28'),
+   h('div',{class:'note'},'Early layers settle <b>syntax and local structure</b>; deeper layers assemble <b>long-range meaning and knowledge</b>. Click any layer to open the block anatomy.'));
+  stage.append(col,ctx.outNote);
+  return ctx;
+ },
+ steps:[
+  {name:'Layer 1 — full pass',hold:2400,caption:'Attention, then feed-forward, both with residual adds. Every detail you\'ve seen so far.',
+   run(c,o){layerPulse(c,0,o)}},
+  {name:'Layer 2',hold:2200,caption:'Same computation, brand-new weights — different heads learn different relations.',
+   run(c,o){layerPulse(c,1,o)}},
+  {name:'Layer 3',hold:2200,caption:'And again. Each pass edits the same 3 × 1024 stream.',
+   run(c,o){layerPulse(c,2,o)}},
+  {name:'Layers 4 → 28 cascade',hold:3600,caption:'Twenty-five more refinements ripple through the stack.',
+   run(c,o){
+    for(let i=3;i<28;i++)setTimeout(()=>layerPulse(c,i,o,true),o.instant?0:dur(105)*(i-3));
+   }},
+  {name:'Deeply refined',hold:2600,caption:'Out the top: still 3 × 1024 — but now every token vector encodes its full context.',
+   run(c,o){c.outNote.classList.add('on');
+    c.outNote.scrollIntoView({block:'nearest',behavior:RM?'auto':'smooth'});
+    if(!o.instant)fly(c.bars[27],c.outNote,{n:8,ms:800});}},
+ ]
+};
+function layerPulse(c,i,o,fast=false){
+  const b=c.bars[i];
+  b.classList.add('lit');b.querySelector('.lstate').textContent='✓';
+  if(!fast)b.scrollIntoView({block:'nearest',behavior:RM?'auto':'smooth'});
+  setTimeout(()=>{b.classList.remove('lit');b.classList.add('done')},o.instant?0:dur(fast?260:1300));
+}
+
+/* ================= scene: output head ================= */
+const TOP5=[[' and',0.31],['.',0.24],[' because',0.12],[' so',0.09],[' more',0.05]];
+SCENES.head={
+ id:'head',title:'Output Head',level:1,parent:'overview',info:INFO.head,
+ mount(stage){
+  stage.append(sceneHeader('Final step · prediction','1024 features → 151 936 scores → one token',
+   'Only the <code>last</code> token\'s vector matters for predicting what comes next — it has already absorbed "I love cats" through attention.'));
+  const ctx={};
+  ctx.hChip=h('span',{class:'chip flow big','data-tip':'<div class="tt">h(cats) after 28 blocks</div><div class="td">The final RMSNorm-ed vector of the last token — the model\'s summary of the whole prefix.</div>'},'h_last · 1 × 1024');
+  /* logit bars */
+  const rr=rng(777);
+  ctx.barVals=Array.from({length:48},(_,i)=>0.06+rr()*0.3);
+  const peaks={6:0.95,19:0.8,31:0.62,38:0.5,44:0.42};
+  for(const[i,v]of Object.entries(peaks))ctx.barVals[i]=v;
+  ctx.winIdx=6;
+  ctx.bars=ctx.barVals.map((v,i)=>h('div',{class:'bar',
+   'data-tip':`<div class="tt">${i===6?'token " and"':i===19?'token "."':i===31?'token " because"':i===38?'token " so"':i===44?'token " more"':'a vocabulary token'}</div><div class="tm">${peaks[i]?'logit '+(peaks[i]*10-2).toFixed(1):'low logit'}</div>`}));
+  ctx.barWrap=h('div',{class:'rv vcol',style:{gap:'6px'}},
+   h('div',{class:'barfield'},ctx.bars),
+   h('div',{style:{font:'10.5px var(--mono)',color:'var(--ink-3)'}},'151 936 vocabulary logits — showing 48'));
+  /* softmax + top5 */
+  ctx.rows=TOP5.map(([w,p],i)=>{
+   const fill=h('div',{class:'pfill'});
+   return{fill,p,el:h('div',{class:'probrow'+(i===0?' win':''),
+    'data-tip':`<div class="tt">"I love cats${w==='.'?'':''}${w}"</div><div class="tm">p = ${p.toFixed(2)}</div>`},
+    h('div',{class:'pw'},JSON.stringify(w)),
+    h('div',{class:'ptrack'},fill),
+    h('div',{class:'pv'},p.toFixed(2)))};
+  });
+  ctx.probWrap=h('div',{class:'rv vcol',style:{gap:'12px'}},
+   h('span',{class:'chip gold big'},'softmax → probabilities · Σ = 1'),
+   h('div',{class:'problist'},ctx.rows.map(r=>r.el)));
+  ctx.finale=h('div',{class:'rv vcol',style:{gap:'10px',marginTop:'6px'}},
+   h('div',{style:{font:'600 22px var(--serif)'}},'"I love cats',
+    h('span',{style:{color:'var(--t-gold)',textShadow:'0 0 18px rgba(239,203,99,.5)'}},' and'),
+    h('span',{style:{color:'var(--ink-3)'}},'▮'),'"'),
+   h('div',{class:'note'},'Greedy decoding takes the argmax; sampling draws from the distribution. Either way the winner is <b>appended and the entire forward pass runs again</b> — that loop is text generation.'));
+  const wbox=h('div',{class:'wbox n'},h('b',{},'W head'),h('span',{},'1024 × 151936'));
+  ctx.wbox=wbox;
+  stage.append(h('div',{class:'vcol',style:{gap:'14px'}},
+   ctx.hChip,arrow(26),wbox,arrow(26),ctx.barWrap,arrow(26),ctx.probWrap,ctx.finale));
+  return ctx;
+ },
+ steps:[
+  {name:'The last vector',hold:2200,caption:'After the final RMSNorm, take row "cats" — 1 × 1024 numbers that summarize the sentence.',
+   run(c){}},
+  {name:'Score the whole vocabulary',hold:3200,caption:'One matmul against the (tied) embedding table: 1024 → 151 936 raw logits.',
+   run(c,o){c.barWrap.classList.add('on');c.wbox.classList.add('lit');
+    if(!o.instant)fly(c.hChip,c.barWrap,{n:10,ms:850});
+    c.bars.forEach((b,i)=>setTimeout(()=>b.style.height=(c.barVals[i]*104)+'px',o.instant?0:dur(500)+dur(24)*i));}},
+  {name:'Softmax',hold:3000,caption:'Exponentiate and normalize: big logits balloon, everything else collapses toward zero.',
+   run(c,o){
+    const peaks={6:0.31,19:0.24,31:0.12,38:0.09,44:0.05};
+    c.bars.forEach((b,i)=>setTimeout(()=>{
+     const p=peaks[i]??0.002;
+     b.style.height=Math.max(2,p*320)+'px';
+     if(i===c.winIdx)b.classList.add('win');
+     else if(!peaks[i])b.style.opacity='.45';
+    },o.instant?0:dur(18)*i));}},
+  {name:'Top candidates',hold:3000,caption:'The distribution, sorted. " and" wins with p = 0.31 — hover the rows.',
+   run(c,o){c.probWrap.classList.add('on');
+    c.probWrap.scrollIntoView({block:'nearest',behavior:RM?'auto':'smooth'});
+    c.rows.forEach((r,i)=>setTimeout(()=>r.fill.style.width=(r.p/0.31*100)+'%',o.instant?0:dur(200)*i+dur(120)));}},
+  {name:'Next token: " and"',hold:3200,caption:'Append it, feed "I love cats and" back through all 28 blocks, predict again. Repeat forever.',
+   run(c,o){c.finale.classList.add('on');
+    c.finale.scrollIntoView({block:'nearest',behavior:RM?'auto':'smooth'});}},
+ ]
+};
+
+/* ================= boot ================= */
+/* deep link: #sceneId or #sceneId/stepIndex, e.g. #attention/5 */
+const mHash=location.hash.match(/^#([a-z]+)(?:\/(\d+))?$/);
+if(mHash&&SCENES[mHash[1]]){
+  mountScene(mHash[1]);
+  const s0=parseInt(mHash[2],10);
+  if(!isNaN(s0))applyStep(s0,{instant:true});
+}else{
+  mountScene('overview');
+}
+</script>
+</body>
+</html>
